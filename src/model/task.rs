@@ -1,8 +1,7 @@
 //! Tasks and the lists they are kept in.
 
-use crate::strings::{tr, trf};
 use super::*;
-use chrono::{Datelike, Duration, NaiveDate, Weekday};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize, Default, Debug)]
@@ -29,6 +28,9 @@ pub struct Task {
     /// how its due date repeats once it is completed
     #[serde(default)]
     pub repeat: Repeat,
+    /// when the repeat stops; each completion counts one time
+    #[serde(default, skip_serializing_if = "Ends::is_never")]
+    pub repeat_end: Ends,
     /// the same server fields as on events, for synced task lists
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
@@ -46,98 +48,6 @@ pub struct Task {
     /// Put away from the Completed list; still kept and synced.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
-}
-
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize, Debug, Default)]
-pub enum Repeat {
-    #[default]
-    None,
-    Daily,
-    Weekdays,
-    Weekly,
-    Monthly,
-    /// on the picked weekdays: bit 0 Monday to bit 6 Sunday, as a frame's
-    Custom(u8),
-}
-
-impl Repeat {
-    pub const ALL: [Repeat; 5] = [Repeat::None, Repeat::Daily, Repeat::Weekdays, Repeat::Weekly, Repeat::Monthly];
-    pub fn label(&self) -> String {
-        match self {
-            Repeat::None => tr("No repeat").into(),
-            Repeat::Daily => tr("Every day").into(),
-            Repeat::Weekdays => tr("Every weekday").into(),
-            Repeat::Weekly => tr("Every week").into(),
-            Repeat::Monthly => tr("Every month").into(),
-            Repeat::Custom(days) => {
-                let names = [tr("Mo"), tr("Tu"), tr("We"), tr("Th"), tr("Fr"), tr("Sa"), tr("Su")];
-                let on: Vec<&str> = (0..7).filter(|i| days & (1 << i) != 0).map(|i| names[i]).collect();
-                if on.is_empty() { tr("Custom").into() } else { trf("Every {}", &[&on.join(", ")]) }
-            }
-        }
-    }
-    /// A custom repeat on the weekday of `day` alone, to start picking from.
-    pub fn custom_from(day: NaiveDate) -> Repeat {
-        Repeat::Custom(1 << day.weekday().num_days_from_monday())
-    }
-    /// The next date after `d` in this pattern.
-    pub fn next(&self, d: NaiveDate) -> NaiveDate {
-        match self {
-            Repeat::None => d,
-            Repeat::Daily => d + Duration::days(1),
-            Repeat::Weekdays => {
-                let mut n = d + Duration::days(1);
-                while matches!(n.weekday(), Weekday::Sat | Weekday::Sun) {
-                    n += Duration::days(1);
-                }
-                n
-            }
-            Repeat::Weekly => d + Duration::days(7),
-            // with no day picked, the same weekday each week
-            Repeat::Custom(days) if days & 0x7f == 0 => d + Duration::days(7),
-            Repeat::Custom(days) => {
-                let mut n = d + Duration::days(1);
-                while days & (1 << n.weekday().num_days_from_monday()) == 0 {
-                    n += Duration::days(1);
-                }
-                n
-            }
-            Repeat::Monthly => d.checked_add_months(chrono::Months::new(1)).unwrap_or(d + Duration::days(30)),
-        }
-    }
-    /// A first last day for a repeating event that starts on `day`: four
-    /// weeks on, twelve weeks for a weekly one, a year for a monthly one.
-    pub fn first_until(&self, day: NaiveDate) -> NaiveDate {
-        match self {
-            Repeat::Weekly | Repeat::Custom(_) => day + Duration::weeks(12),
-            Repeat::Monthly => day.checked_add_months(chrono::Months::new(12)).unwrap_or(day),
-            _ => day + Duration::weeks(4),
-        }
-    }
-    /// The days after `day`, up to and with `until`, on which an event
-    /// that starts on `day` comes again. A monthly one keeps its day of the
-    /// month where the month has it; at most 200 days.
-    pub fn days_after(&self, day: NaiveDate, until: NaiveDate) -> Vec<NaiveDate> {
-        let mut out = Vec::new();
-        if *self == Repeat::None {
-            return out;
-        }
-        let mut d = day;
-        for i in 1..200u32 {
-            d = match self {
-                Repeat::Monthly => match day.checked_add_months(chrono::Months::new(i)) {
-                    Some(n) => n,
-                    None => break,
-                },
-                r => r.next(d),
-            };
-            if d > until {
-                break;
-            }
-            out.push(d);
-        }
-        out
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -220,6 +130,7 @@ impl Task {
         self.tags = n.tags;
         self.earliest = n.earliest;
         self.repeat = n.repeat;
+        self.repeat_end = n.repeat_end;
         self.color = n.color;
     }
     pub fn detach(&mut self) {

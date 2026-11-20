@@ -26,9 +26,9 @@ pub struct EventEdit {
     pub base: Option<Event>,
     /// for a task's block, its task, edited in the same window
     pub task: Option<TaskEdit>,
-    /// saving lays the event out again on these days, up to `until_text`
+    /// saving lays the event out again on these days, until `ends`
     pub repeat: Repeat,
-    pub until_text: String,
+    pub ends: Ends,
 }
 
 /// What a block drawn on the calendar becomes.
@@ -50,14 +50,14 @@ pub struct CreateEdit {
     /// what a new task gets besides its name: list, importance, notes
     pub task: Task,
     pub due_text: String,
-    /// how the block repeats, and for an event up to which day
+    /// how the block repeats, and when that ends
     pub repeat: Repeat,
-    pub until_text: String,
+    pub ends: Ends,
 }
 
 impl CreateEdit {
     pub fn new(ev: Event, kind: CreateKind, anchor_rect: egui::Rect) -> Self {
-        CreateEdit { ev, kind, anchor_rect, focus: true, task: Task::default(), due_text: String::new(), repeat: Repeat::None, until_text: String::new() }
+        CreateEdit { ev, kind, anchor_rect, focus: true, task: Task::default(), due_text: String::new(), repeat: Repeat::None, ends: Ends::Never }
     }
 }
 
@@ -190,8 +190,8 @@ impl TaskEdit {
         let (t, b) = (&self.task, &self.base);
         let date = |d: Option<NaiveDate>| d.map(|d| d.to_string()).unwrap_or_default();
         !same_json(
-            &(&t.title, &t.notes, t.done, t.priority, t.duration_min, t.list, &t.repeat, t.flexible, t.color),
-            &(&b.title, &b.notes, b.done, b.priority, b.duration_min, b.list, &b.repeat, b.flexible, b.color),
+            &(&t.title, &t.notes, t.done, t.priority, t.duration_min, t.list, &t.repeat, &t.repeat_end, t.flexible, t.color),
+            &(&b.title, &b.notes, b.done, b.priority, b.duration_min, b.list, &b.repeat, &b.repeat_end, b.flexible, b.color),
         ) || self.due_text.trim() != date(b.due)
             || self.earliest_text.trim() != date(b.earliest)
             || self.tags_text.split_whitespace().ne(b.tags.iter().map(String::as_str))
@@ -825,7 +825,7 @@ impl App {
             base: None,
             task: None,
             repeat: Repeat::None,
-            until_text: String::new(),
+            ends: Ends::Never,
         });
         self.selected = None;
     }
@@ -850,7 +850,7 @@ impl App {
             base: None,
             task: Some(TaskEdit::of(&task)),
             repeat: Repeat::None,
-            until_text: String::new(),
+            ends: Ends::Never,
         });
         self.create = None;
         self.close_inline_editor();
@@ -866,7 +866,7 @@ impl App {
     pub fn edit_event_at(&mut self, id: u64, anchor_rect: Option<egui::Rect>) {
         if let Some(ev) = self.shown_event(id) {
             let task = ev.task_id.and_then(|t| self.data.task(t)).map(TaskEdit::of);
-            self.editor = Some(EventEdit { base: Some(ev.clone()), ev, is_new: false, focus: true, anchor_rect, task, repeat: Repeat::None, until_text: String::new() });
+            self.editor = Some(EventEdit { base: Some(ev.clone()), ev, is_new: false, focus: true, anchor_rect, task, repeat: Repeat::None, ends: Ends::Never });
             self.create = None;
             self.selected = Some(id);
         }
@@ -929,12 +929,17 @@ impl App {
             if t.done && t.repeat != Repeat::None {
                 if let Some(due) = t.due {
                     let new_due = t.repeat.next(due);
-                    let mut n = t.clone();
-                    n.done = false;
-                    n.due = Some(new_due);
-                    n.earliest = t.earliest.map(|e| e + (new_due - due));
+                    // a repeat that has run its times or passed its last day stops
+                    if let Some(left) = t.repeat_end.after_one(new_due).filter(|_| new_due > due) {
+                        let mut n = t.clone();
+                        n.done = false;
+                        n.due = Some(new_due);
+                        n.earliest = t.earliest.map(|e| e + (new_due - due));
+                        n.repeat_end = left;
+                        next = Some(n);
+                    }
                     t.repeat = Repeat::None;
-                    next = Some(n);
+                    t.repeat_end = Ends::Never;
                 }
             }
         }
