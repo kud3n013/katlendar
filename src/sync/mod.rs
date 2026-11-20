@@ -8,6 +8,7 @@ pub mod oauth;
 pub mod proton;
 pub mod proton_keys;
 pub mod proton_srp;
+pub mod todoist;
 
 use crate::strings::{tr, trf};
 use crate::ics::{FeedEvent, FeedTask};
@@ -102,6 +103,10 @@ pub trait Provider: Send {
     fn save_native(&mut self, _cal: &RemoteCalendar, _e: &Event) -> Option<PushResult> {
         None
     }
+    /// The same for a task. None where tasks travel as iCalendar text.
+    fn save_task_native(&mut self, _cal: &RemoteCalendar, _t: &Task) -> Option<PushResult> {
+        None
+    }
     /// An event as the server holds it, with its version.
     fn get(&mut self, _href: &str) -> Result<(String, Option<String>), SyncError> {
         Err(SyncError::Other(tr("This calendar is read-only.").into()))
@@ -183,7 +188,7 @@ pub fn place_and_notes(notes: &str) -> (String, String) {
 }
 
 /// A name for a new event that no other event has.
-fn new_uid() -> String {
+pub(crate) fn new_uid() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
@@ -280,7 +285,10 @@ pub fn push(p: &mut dyn Provider, cal: &RemoteCalendar, jobs: &[PushJob], stamp:
                 Some(r) => r,
                 None => save(p, cal, e, stamp),
             },
-            PushJob::SaveTask(t) => save_task(p, cal, t, stamp),
+            PushJob::SaveTask(t) => match p.save_task_native(cal, t) {
+                Some(r) => r,
+                None => save_task(p, cal, t, stamp),
+            },
             PushJob::Delete { href, etag } => match p.delete(cal, href, etag.as_deref()) {
                 // already gone is as good as deleted
                 Ok(()) | Err(SyncError::Gone) => PushResult::Deleted { href: href.clone() },

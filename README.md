@@ -122,3 +122,6 @@ GPL-2.0 — see [LICENSE](LICENSE).
 
 The bundled [Lucide](https://lucide.dev) icon font in `assets/lucide/` is
 ISC-licensed — see [assets/lucide/LICENSE](assets/lucide/LICENSE).
+The service logos in `assets/brands/` (shown as the icon of a synced task
+list) are from [Simple Icons](https://simpleicons.org), CC0; the logos are
+trademarks of their owners. `assets/brands/build.py` makes the font of them.

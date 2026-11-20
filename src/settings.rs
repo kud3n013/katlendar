@@ -1204,7 +1204,7 @@ impl App {
     fn page_calendars(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if finding(ui) {
             let names: Vec<&str> = self.data.calendars.iter().filter(|c| c.url.is_some()).map(|c| c.name.as_str()).collect();
-            let words = [&["integration", "subscription", "link", "url", "ics", "webcal", "feed", "proton", "import", "refresh", "unsubscribe", "account", "caldav", "nextcloud", "fastmail", "radicale", "sync", "password", "keyring", "sign in", "server", "google", "gmail", "oauth", "client id", "microsoft", "outlook", "office 365", "entra"][..], &names].concat();
+            let words = [&["integration", "subscription", "link", "url", "ics", "webcal", "feed", "proton", "import", "refresh", "unsubscribe", "account", "caldav", "nextcloud", "fastmail", "radicale", "sync", "password", "keyring", "sign in", "server", "google", "gmail", "oauth", "client id", "microsoft", "outlook", "office 365", "entra", "todoist", "api token", "tasks", "to-do"][..], &names].concat();
             page_result(ui, Page::Calendars, tr("Subscribe to a calendar"), tr("Bring other calendars in by their link, such as Proton Calendar"), &words);
             return;
         }
@@ -1213,10 +1213,10 @@ impl App {
         ui.add(egui::Label::new(RichText::new(tr("Bring calendars in from a link or from an account. Pick a kind to set it up.")).size(theme::size::LARGE).color(muted)).wrap());
         ui.add_space(12.0);
         // one button per kind; the chosen one shows its form below
-        const KINDS: [(u8, &str); 6] = [(1, later("Calendar feed")), (2, "CalDAV"), (3, "Nextcloud"), (4, "Google"), (5, "Microsoft"), (6, "Proton")];
+        const KINDS: [(u8, &str); 7] = [(1, later("Calendar feed")), (2, "CalDAV"), (3, "Nextcloud"), (4, "Google"), (5, "Microsoft"), (6, "Proton"), (7, "Todoist")];
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(10.0, 10.0);
-            let w = ((ui.available_width() - 50.0) / 6.0).floor().clamp(96.0, 230.0);
+            let w = ((ui.available_width() - 60.0) / KINDS.len() as f32).floor().clamp(96.0, 230.0);
             for (kind, label) in KINDS {
                 let on = self.sub_kind == kind;
                 let b = egui::Button::new(RichText::new(tr(label)).size(theme::size::UI))
@@ -1334,6 +1334,25 @@ impl App {
                         } else if go(ui, tr("Sign in to Proton"), true) {
                             self.connect_proton(ctx);
                         }
+                    }
+                    7 => {
+                        help(ui, tr("Each Todoist project comes in as a task list, and stays in step both ways: tasks you add, change, finish or delete here are sent to Todoist."));
+                        help(ui, tr("Paste your API token. In Todoist, open Settings > Integrations > Developer and copy it. It is kept in your desktop's keyring, never in katlendar's files. Anyone with the token can read and change your tasks, so don't share it."));
+                        setup_links(ui, &[(tr("Open Todoist's developer settings"), crate::sync::todoist::TOKEN_PAGE)]);
+                        let r = field(ui, &mut self.acct_pass, tr("API token"), true);
+                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let connecting = self.data.accounts.iter().any(|a| a.todoist && a.home.is_none() && self.syncing.contains(&a.id));
+                        ui.horizontal(|ui| {
+                            if (go(ui, tr("Connect"), !connecting) || enter) && !connecting {
+                                self.connect_todoist(ctx);
+                            }
+                            if connecting {
+                                ui.spinner();
+                                ui.label(RichText::new(tr("Connecting…")).size(theme::size::UI).color(muted));
+                            }
+                        });
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(tr("katlendar is not created by, affiliated with, or supported by Todoist.")).size(theme::size::CAPTION).color(muted));
                     }
                     _ => {
                         help(ui, tr("For Microsoft 365 and Outlook.com. katlendar has no registration of its own with Microsoft, so you bring one: in the Microsoft Entra admin center, register an app for accounts in any organisation and personal accounts, add the platform \"Mobile and desktop applications\" with the redirect address http://localhost, and allow the delegated Graph permission Calendars.ReadWrite. Paste its Application (client) ID here; there is no secret."));
@@ -1476,7 +1495,7 @@ impl App {
                         ui.add_space(10.0);
                         ui.add(egui::Label::new(RichText::new(a.label()).size(theme::size::TITLE)).truncate());
                         let when = a.last_sync.as_ref().map(|t| format!("  ·  synced {t}")).unwrap_or_default();
-                        let kind = if a.proton { tr("Proton account") } else if a.microsoft { tr("Microsoft account") } else if a.google { tr("Google account") } else if a.nextcloud { tr("Nextcloud account") } else { tr("CalDAV account") };
+                        let kind = if a.todoist { tr("Todoist account") } else if a.proton { tr("Proton account") } else if a.microsoft { tr("Microsoft account") } else if a.google { tr("Google account") } else if a.nextcloud { tr("Nextcloud account") } else { tr("CalDAV account") };
                         ui.add(egui::Label::new(RichText::new(trf("{}{}", &[&kind, &when])).size(theme::size::BODY).color(muted)).truncate());
                     });
                 });

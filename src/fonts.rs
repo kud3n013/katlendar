@@ -65,11 +65,14 @@ pub fn apply(ctx: &egui::Context, family: &str) {
     // the Lucide icon font covers only private-use glyphs, so it can sit at
     // the end of every family as a fallback
     fonts.font_data.insert("lucide".into(), Arc::new(FontData::from_static(include_bytes!("../assets/lucide/lucide.ttf"))));
+    // and so can the services' logos
+    fonts.font_data.insert("brands".into(), Arc::new(FontData::from_static(include_bytes!("../assets/brands/brands.ttf"))));
     // titles use the same weight as the rest
     fonts.families.insert(FontFamily::Name("bold".into()), text.clone());
     fonts.families.insert(FontFamily::Proportional, text);
     for fam in fonts.families.values_mut() {
         fam.push("lucide".to_string());
+        fam.push("brands".to_string());
     }
     ctx.set_fonts(fonts);
 }

@@ -31,6 +31,7 @@ pub const ELLIPSIS: &str = "\u{e0b6}"; // ellipsis
 pub const KEYBOARD: &str = "\u{e284}"; // keyboard
 pub const INFO: &str = "\u{e0f9}"; // info
 pub const CIRCLE: &str = "\u{e076}"; // circle
+pub const SERVER: &str = "\u{e153}"; // server
 pub const HELP: &str = "\u{e082}"; // circle-help
 pub const LIST_TODO: &str = "\u{e4c3}"; // list-todo
 pub const TAG: &str = "\u{e17f}"; // tag
@@ -69,3 +70,8 @@ pub const LIST_ICONS: [&str; 19] = [
     "\u{e1b1}", // wrench
     "\u{e2de}", // leaf
 ];
+
+// Service logos, from the font of them (assets/brands/brands.ttf), shown
+// as the icon of a task list that comes from that service.
+pub const TODOIST: &str = "\u{f8e0}";
+pub const NEXTCLOUD: &str = "\u{f8e1}";

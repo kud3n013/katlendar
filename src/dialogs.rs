@@ -565,7 +565,7 @@ impl App {
         let ids = std::iter::once(0).chain(self.data.lists.iter().filter(|l| !writable || !l.read_only).map(|l| l.id));
         ids.map(|id| {
             let (_, col, icon) = self.data.list_look(id);
-            let name = if id == 0 { self.data.prefs.inbox_name() } else { self.data.list_look(id).0 };
+            let name = self.data.list_title(id);
             let icon = if icon.is_empty() { icons::CIRCLE.to_string() } else { icon };
             (id, format!("{icon} {name}"), rgb(col))
         })
@@ -1161,7 +1161,7 @@ impl App {
         let muted = self.pal.muted;
         let focus = std::mem::take(&mut self.new_task_focus);
         let list_name = match self.data.lists.iter().find(|l| l.id == self.new_task_list) {
-            Some(l) => l.name.clone(),
+            Some(l) => self.data.list_title(l.id),
             None => {
                 self.new_task_list = 0;
                 "your Inbox".to_string()

@@ -55,7 +55,8 @@ pub struct TaskList {
     pub id: u64,
     pub name: String,
     pub color: [u8; 3],
-    /// a Lucide glyph shown in place of the ring; empty for the ring
+    /// a Lucide glyph shown in place of the ring; empty for the ring, or
+    /// for a synced list its service's logo
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub icon: String,
     /// the synced account it belongs to; None for one's own lists
@@ -79,16 +80,39 @@ pub const INBOX_COLOR: [u8; 3] = [0x35, 0x85, 0xe1];
 
 impl Data {
     /// A list's name, colour and icon as kept; list 0 is the Inbox, whose
-    /// name is empty until it is renamed.
+    /// name is empty until it is renamed. A list with no icon picked shows
+    /// its own default.
     pub fn list_look(&self, id: u64) -> (String, [u8; 3], String) {
         match self.lists.iter().find(|l| l.id == id) {
+            Some(l) if l.icon.is_empty() => (l.name.clone(), l.color, self.list_icon(id).to_string()),
             Some(l) => (l.name.clone(), l.color, l.icon.clone()),
             None => (self.prefs.inbox_name.clone(), self.prefs.inbox_color.unwrap_or(INBOX_COLOR), self.prefs.inbox_icon.clone()),
         }
     }
+    /// A list's name as it is shown: a synced list's starts with its
+    /// service, as in "Todoist - Inbox".
+    pub fn list_title(&self, id: u64) -> String {
+        let Some(l) = self.lists.iter().find(|l| l.id == id) else { return self.prefs.inbox_name() };
+        let name = if l.name.trim().is_empty() { crate::strings::tr("Untitled list").to_string() } else { l.name.clone() };
+        match l.account.and_then(|a| self.account(a)) {
+            Some(a) => format!("{} - {name}", a.service()),
+            None => name,
+        }
+    }
+    /// The icon a list shows when none was picked: its service's logo for
+    /// a synced list, else none, which is the ring.
+    pub fn list_icon(&self, id: u64) -> &'static str {
+        let account = self.lists.iter().find(|l| l.id == id).and_then(|l| l.account);
+        account.and_then(|a| self.account(a)).map(|a| a.icon()).unwrap_or("")
+    }
     pub fn set_list_look(&mut self, id: u64, look: (String, [u8; 3], String)) {
+        let default = self.list_icon(id);
         if let Some(l) = self.lists.iter_mut().find(|l| l.id == id) {
             (l.name, l.color, l.icon) = look;
+            // the default is kept as none, so it follows the account
+            if l.icon == default {
+                l.icon.clear();
+            }
         } else if id == 0 {
             self.prefs.inbox_name = look.0;
             self.prefs.inbox_color = Some(look.1).filter(|c| *c != INBOX_COLOR);
@@ -139,6 +163,6 @@ impl Task {
     }
     /// The parts a server keeps are the same in both.
     pub fn same_content(&self, o: &Task) -> bool {
-        self.title == o.title && self.notes == o.notes && self.due == o.due && self.priority == o.priority && self.done == o.done
+        self.title == o.title && self.notes == o.notes && self.due == o.due && self.priority == o.priority && self.done == o.done && self.tags == o.tags && self.duration_min == o.duration_min
     }
 }

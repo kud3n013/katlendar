@@ -63,16 +63,27 @@ impl App {
                                 self.acct_server.clear();
                                 self.acct_user.clear();
                                 let n = list.len();
-                                self.say(ctx, trf("Connected: {} calendar{}", &[&n, &if n == 1 { "" } else { "s" }]), false);
+                                let text = if self.data.account(account).is_some_and(|a| a.todoist) {
+                                    trf("Connected: {} task list{}", &[&n, &if n == 1 { "" } else { "s" }])
+                                } else {
+                                    trf("Connected: {} calendar{}", &[&n, &if n == 1 { "" } else { "s" }])
+                                };
+                                self.say(ctx, text, false);
                             }
                             self.pull_account(ctx, account);
                         }
                         Err(e) if first => {
                             // nothing was kept: the form shows what went wrong
-                            self.acct_server = self.data.account(account).map(|a| a.server.clone()).unwrap_or_default();
-                            self.acct_user = self.data.account(account).map(|a| a.username.clone()).unwrap_or_default();
+                            let todoist = self.data.account(account).is_some_and(|a| a.todoist);
+                            if !todoist {
+                                self.acct_server = self.data.account(account).map(|a| a.server.clone()).unwrap_or_default();
+                                self.acct_user = self.data.account(account).map(|a| a.username.clone()).unwrap_or_default();
+                            }
                             self.data.remove_account(account);
-                            self.acct_error = Some(e.text());
+                            self.acct_error = Some(match e {
+                                sync::SyncError::Auth if todoist => tr("Todoist refused the API token. Copy it again from Todoist's settings and paste it here.").into(),
+                                e => e.text(),
+                            });
                         }
                         Err(e) => {
                             let why = account_error(self.data.account(account), &e);

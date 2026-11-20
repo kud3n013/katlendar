@@ -850,6 +850,17 @@ pub struct FeedTask {
     pub done: bool,
     pub href: Option<String>,
     pub etag: Option<String>,
+    /// the server's own copy, for services that are not iCalendar
+    pub raw: Option<String>,
+    /// fields only some services keep; None leaves them as they are here
+    pub extra: Option<TaskExtra>,
+}
+
+/// What a task service keeps beyond what iCalendar tasks carry here.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct TaskExtra {
+    pub tags: Vec<String>,
+    pub duration_min: Option<i64>,
 }
 
 /// The tasks (VTODO) in a calendar text. Repeating tasks are left out:
