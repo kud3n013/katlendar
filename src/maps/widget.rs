@@ -4,7 +4,8 @@ use std::f64::consts::PI;
 
 use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense};
 
-use super::tiles::{tiles, TileId, ATTRIBUTION, COPYRIGHT, MAX_ZOOM, TILE};
+use super::tiles::{tiles, TileId, ATTRIBUTION, COPYRIGHT, GOOGLE_ATTRIBUTION, GOOGLE_TERMS, TILE};
+use super::Source;
 use crate::icons;
 use crate::tr;
 
@@ -13,8 +14,9 @@ const MAX_LAT: f64 = 85.051_128_78;
 const MIN_ZOOM: f64 = 1.0;
 /// Coarser tiles stand in for one not yet here, up to this many zooms out.
 const STAND_IN: u8 = 6;
-/// The ground tiles are drawn on, OpenStreetMap's own.
+/// The ground tiles are drawn on, OpenStreetMap's own and Google's.
 const LAND: Color32 = Color32::from_rgb(0xf2, 0xef, 0xe9);
+const GOOGLE_LAND: Color32 = Color32::from_rgb(0xf5, 0xf5, 0xf5);
 const PIN: Color32 = Color32::from_rgb(0xe5, 0x48, 0x4d);
 /// How far above its point the middle of the pin's head is.
 const PIN_HEAD: f32 = 17.0;
@@ -52,10 +54,10 @@ impl MapView {
         let (x, y) = world(self.center.0, self.center.1, self.zoom);
         self.center = spot(x - dx, y - dy, self.zoom);
     }
-    /// Zooms by `dz` steps, keeping the spot `off` points from the middle
-    /// where it is: under the pointer, for a scroll.
-    pub fn zoom_by(&mut self, dz: f64, off: (f64, f64)) {
-        let z = (self.zoom + dz).clamp(MIN_ZOOM, MAX_ZOOM as f64);
+    /// Zooms by `dz` steps, no closer than `max`, keeping the spot `off`
+    /// points from the middle where it is: under the pointer, for a scroll.
+    pub fn zoom_by(&mut self, dz: f64, off: (f64, f64), max: u8) {
+        let z = (self.zoom + dz).clamp(MIN_ZOOM, (max as f64).max(MIN_ZOOM));
         let (x, y) = world(self.center.0, self.center.1, self.zoom);
         let f = (z - self.zoom).exp2();
         self.center = spot((x + off.0) * f - off.0, (y + off.1) * f - off.1, z);
@@ -70,16 +72,16 @@ pub struct MapResponse {
     pub pin_moved: Option<(f64, f64)>,
 }
 
-/// Draws the map in `size`, with `pin` on it. A drag moves it; scrolling,
-/// a double click and the buttons zoom.
-pub fn show(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size: egui::Vec2) -> MapResponse {
-    draw(ui, view, pin, size, false)
+/// Draws the map from `src` in `size`, with `pin` on it. A drag moves
+/// it; scrolling, a double click and the buttons zoom.
+pub fn show(ui: &mut egui::Ui, src: Source, view: &mut MapView, pin: Option<(f64, f64)>, size: egui::Vec2) -> MapResponse {
+    draw(ui, src, view, pin, size, false)
 }
 
 /// A map as [`show`] draws it, whose pin can be picked up and put down
 /// somewhere else.
-pub fn pick(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size: egui::Vec2) -> MapResponse {
-    draw(ui, view, pin, size, true)
+pub fn pick(ui: &mut egui::Ui, src: Source, view: &mut MapView, pin: Option<(f64, f64)>, size: egui::Vec2) -> MapResponse {
+    draw(ui, src, view, pin, size, true)
 }
 
 /// Where on the screen a spot is, on a map whose middle is at `mid`:
@@ -98,8 +100,13 @@ fn at_point(view: &MapView, mid: Pos2, p: Pos2) -> (f64, f64) {
     spot(x + (p.x - mid.x) as f64, y + (p.y - mid.y) as f64, view.zoom)
 }
 
-fn draw(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size: egui::Vec2, movable: bool) -> MapResponse {
+fn draw(ui: &mut egui::Ui, src: Source, view: &mut MapView, pin: Option<(f64, f64)>, size: egui::Vec2, movable: bool) -> MapResponse {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    let max = src.max_zoom();
+    // a view from a closer map, when the map in use has changed
+    if view.zoom > max as f64 {
+        view.zoom_by(max as f64 - view.zoom, (0.0, 0.0), max);
+    }
     let mid = rect.center();
     let off = |p: Pos2| ((p.x - mid.x) as f64, (p.y - mid.y) as f64);
     // a pin being dragged: how far its point is from the pointer
@@ -144,12 +151,12 @@ fn draw(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size: eg
         let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
         let dz = scroll as f64 / 120.0 + (pinch as f64).log2();
         if dz != 0.0 {
-            view.zoom_by(dz, off(p));
+            view.zoom_by(dz, off(p), max);
             // the scroll zoomed the map, so the window around it stays put
             ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
         }
         if resp.double_clicked() {
-            view.zoom_by(1.0, off(p));
+            view.zoom_by(1.0, off(p), max);
         }
         if movable && held.is_none() && pin_at.is_some_and(|t| p.distance(t - vec2(0.0, PIN_HEAD)) <= 12.0) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
@@ -158,8 +165,8 @@ fn draw(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size: eg
     let clicked = resp.clicked().then(|| resp.interact_pointer_pos()).flatten().map(|p| at_point(view, mid, p));
 
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, LAND);
-    draw_tiles(ui.ctx(), &painter, rect, view);
+    painter.rect_filled(rect, 0.0, if src == Source::Google { GOOGLE_LAND } else { LAND });
+    let area = draw_tiles(ui.ctx(), &painter, rect, view, src);
     if let Some(tip) = pin_at {
         draw_pin(&painter, tip);
     }
@@ -174,10 +181,10 @@ fn draw(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size: eg
         ui.place(r, egui::Button::new(icon)).on_hover_text(tip).clicked()
     };
     if button(ui, icons::PLUS, tr("Zoom in")) {
-        view.zoom_by(view.zoom.floor() + 1.0 - view.zoom, (0.0, 0.0));
+        view.zoom_by(view.zoom.floor() + 1.0 - view.zoom, (0.0, 0.0), max);
     }
     if button(ui, icons::MINUS, tr("Zoom out")) {
-        view.zoom_by(view.zoom.ceil() - 1.0 - view.zoom, (0.0, 0.0));
+        view.zoom_by(view.zoom.ceil() - 1.0 - view.zoom, (0.0, 0.0), max);
     }
     if let Some(p) = pin.filter(|p| {
         let (a, b) = (world(p.0, p.1, view.zoom), world(view.center.0, view.center.1, view.zoom));
@@ -187,22 +194,35 @@ fn draw(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size: eg
             view.center = p;
         }
     }
-    credit(ui, &painter, rect, resp.id);
+    let words = match src {
+        Source::Osm => ATTRIBUTION.to_string(),
+        Source::Google => match tiles(ui.ctx()).credit(area) {
+            Some(c) => format!("{GOOGLE_ATTRIBUTION} · {c}"),
+            None => GOOGLE_ATTRIBUTION.to_string(),
+        },
+    };
+    let link = if src == Source::Google { GOOGLE_TERMS } else { COPYRIGHT };
+    credit(ui, &painter, rect, resp.id, &words, link);
     MapResponse { clicked, pin_moved }
 }
 
 /// The tiles under the view. Each is asked for nearest the middle last,
 /// so it comes first; while one is on its way a coarser one already here
-/// is drawn enlarged in its place.
-fn draw_tiles(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, view: &MapView) {
+/// is drawn enlarged in its place. Gives back the tiles it covers.
+fn draw_tiles(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, view: &MapView, src: Source) -> super::tiles::Area {
     let tiles = tiles(ctx);
-    let z = view.zoom.round().clamp(0.0, MAX_ZOOM as f64) as u8;
+    let z = view.zoom.round().clamp(0.0, src.max_zoom() as f64) as u8;
     let scale = (view.zoom - z as f64).exp2();
     let (cx, cy) = world(view.center.0, view.center.1, z as f64);
     let n = 1i64 << z;
     let half = (rect.width() as f64 / 2.0 / scale, rect.height() as f64 / 2.0 / scale);
     let range = |c: f64, h: f64| ((c - h) / TILE).floor() as i64..=((c + h) / TILE).floor() as i64;
     let mid = rect.center();
+    let (xs, ys) = (range(cx, half.0), range(cy, half.1));
+    let edge = |v: i64| v.clamp(0, n - 1) as u32;
+    // past the date line the whole width is shown
+    let (w, e) = if xs.end() - xs.start() + 1 >= n || *xs.start() < 0 || *xs.end() >= n { (0, n as u32 - 1) } else { (edge(*xs.start()), edge(*xs.end())) };
+    let area = (z, [w, edge(*ys.start()), e, edge(*ys.end())]);
     let mut wanted = Vec::new();
     for ty in range(cy, half.1) {
         if !(0..n).contains(&ty) {
@@ -211,7 +231,7 @@ fn draw_tiles(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, view: &M
         for tx in range(cx, half.0) {
             let min = pos2(mid.x + ((tx as f64 * TILE - cx) * scale) as f32, mid.y + ((ty as f64 * TILE - cy) * scale) as f32);
             let r = Rect::from_min_size(min, egui::Vec2::splat((TILE * scale) as f32));
-            let id = TileId { z, x: tx.rem_euclid(n) as u32, y: ty as u32 };
+            let id = TileId { src, z, x: tx.rem_euclid(n) as u32, y: ty as u32 };
             wanted.push((r.center().distance_sq(mid), id, r));
         }
     }
@@ -233,6 +253,7 @@ fn draw_tiles(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, view: &M
             }
         }
     }
+    area
 }
 
 /// A pin with its point on `tip`.
@@ -249,18 +270,19 @@ fn draw_pin(painter: &egui::Painter, tip: Pos2) {
     painter.circle_filled(head, 3.0, Color32::WHITE);
 }
 
-/// "© OpenStreetMap contributors" in the bottom right corner, which
-/// opens what that means.
-fn credit(ui: &mut egui::Ui, painter: &egui::Painter, rect: Rect, id: egui::Id) {
+/// Who the map is from, "© OpenStreetMap contributors" or "Google Maps"
+/// and its data's copyright, in the bottom right corner; it opens `link`.
+fn credit(ui: &mut egui::Ui, painter: &egui::Painter, rect: Rect, id: egui::Id, words: &str, link: &str) {
     let ink = Color32::from_gray(50);
-    let galley = painter.layout_no_wrap(ATTRIBUTION.into(), egui::FontId::proportional(10.0), ink);
+    let galley = painter.layout_no_wrap(words.into(), egui::FontId::proportional(10.0), ink);
     let pad = vec2(4.0, 1.0);
     let r = Rect::from_min_max(rect.right_bottom() - galley.size() - pad * 2.0, rect.right_bottom());
     painter.rect_filled(r, 0.0, Color32::from_white_alpha(200));
     painter.galley(r.min + pad, galley, ink);
-    let link = ui.interact(r, id.with("credit"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(COPYRIGHT);
-    if link.clicked() {
-        crate::platform::open_url(COPYRIGHT);
+    let r = r.intersect(rect);
+    let resp = ui.interact(r, id.with("credit"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(link);
+    if resp.clicked() {
+        crate::platform::open_url(link);
     }
 }
 
@@ -304,7 +326,7 @@ mod tests {
                 ..Default::default()
             };
             let mut out = ctx.run_ui(input, |ui| {
-                show(ui, &mut view, Some((51.5, -0.12)), vec2(300.0, 160.0));
+                show(ui, Source::Osm, &mut view, Some((51.5, -0.12)), vec2(300.0, 160.0));
             });
             // there is no painter to take the font textures
             out.textures_delta.clear();
@@ -340,7 +362,7 @@ mod tests {
         for (i, events) in frames.into_iter().enumerate() {
             let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0))), time: Some(i as f64 / 60.0), events, ..Default::default() };
             let mut out = ctx.run_ui(input, |ui| {
-                let r = pick(ui, &mut view, Some((51.5, -0.12)), vec2(300.0, 160.0));
+                let r = pick(ui, Source::Osm, &mut view, Some((51.5, -0.12)), vec2(300.0, 160.0));
                 moved = moved.or(r.pin_moved);
             });
             out.textures_delta.clear();
@@ -376,12 +398,14 @@ mod tests {
             spot(x + off.0, y + off.1, v.zoom)
         };
         let before = under(&v);
-        v.zoom_by(1.5, off);
+        v.zoom_by(1.5, off, 19);
         assert_eq!(v.zoom, 13.5);
         let after = under(&v);
         assert!((before.0 - after.0).abs() < 1e-9 && (before.1 - after.1).abs() < 1e-9);
-        v.zoom_by(40.0, (0.0, 0.0));
-        assert_eq!(v.zoom, MAX_ZOOM as f64, "no closer than the server draws");
+        v.zoom_by(40.0, (0.0, 0.0), Source::Osm.max_zoom());
+        assert_eq!(v.zoom, 19.0, "no closer than the server draws");
+        v.zoom_by(40.0, (0.0, 0.0), Source::Google.max_zoom());
+        assert_eq!(v.zoom, 21.0);
         let mut w = MapView { center: (0.0, 0.0), zoom: 2.0 };
         w.pan(-TILE, 0.0);
         assert!(near(w.center, (0.0, 90.0)));

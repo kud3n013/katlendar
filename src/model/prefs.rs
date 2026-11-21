@@ -157,6 +157,8 @@ pub struct Prefs {
     pub check_updates: bool,
     /// the map a place's "Open in" button shows it on
     pub open_places_in: OpenIn,
+    /// where places are found and maps come from
+    pub map_provider: MapProvider,
 }
 
 impl Default for Prefs {
@@ -214,6 +216,7 @@ impl Default for Prefs {
             quick: QuickSyntax::default(),
             check_updates: true,
             open_places_in: OpenIn::default(),
+            map_provider: MapProvider::default(),
         }
     }
 }

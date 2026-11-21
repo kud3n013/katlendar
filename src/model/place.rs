@@ -1,7 +1,12 @@
 //! Where an event or task happens: the text people read, and the spot
 //! on a map when one is known.
 
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+
+/// Google lets the spot of a place it found be kept this many days; its
+/// id may be kept for good, and the spot asked for again by it.
+pub const GOOGLE_GEO_DAYS: i64 = 30;
 
 #[derive(Clone, Serialize, Deserialize, Default, Debug, PartialEq)]
 pub struct Place {
@@ -10,18 +15,74 @@ pub struct Place {
     /// latitude and longitude in degrees, when known
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geo: Option<(f64, f64)>,
+    /// Google's id for the place, when it was found on Google Maps
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google_id: Option<String>,
+    /// the day the spot came from Google, which lets it be kept a while
+    /// only; such a spot stays here and is not sent to calendar servers
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geo_from_google: Option<NaiveDate>,
 }
 
 impl Place {
     /// A place with only a text; None when the text is empty.
     pub fn named(text: &str) -> Option<Place> {
         let text = text.trim();
-        (!text.is_empty()).then(|| Place { text: text.to_string(), geo: None })
+        (!text.is_empty()).then(|| Place { text: text.to_string(), ..Default::default() })
     }
     /// A place from what a server sent; None when it sent nothing.
     pub fn of(text: &str, geo: Option<(f64, f64)>) -> Option<Place> {
         let text = text.trim();
-        (!text.is_empty() || geo.is_some()).then(|| Place { text: text.to_string(), geo })
+        (!text.is_empty() || geo.is_some()).then(|| Place { text: text.to_string(), geo, ..Default::default() })
+    }
+
+    /// The spot calendar servers are told: not one that came from Google,
+    /// which may only be kept here, and for a while.
+    pub fn shared_geo(&self) -> Option<(f64, f64)> {
+        self.geo.filter(|_| self.geo_from_google.is_none())
+    }
+
+    /// Lets go of a spot from Google once it has been kept as long as
+    /// Google allows; the place keeps its id, so the spot can be asked
+    /// for again. Whether anything changed.
+    pub fn expire(&mut self, today: NaiveDate) -> bool {
+        match self.geo_from_google {
+            Some(from) if (today - from).num_days() >= GOOGLE_GEO_DAYS => {
+                self.geo = None;
+                self.geo_from_google = None;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+/// The place a server sent for one kept here. A server is not told a
+/// spot from Google, so when it sends the same words back with no spot,
+/// the place here, with its spot and id, stays.
+pub fn from_server(ours: Option<Place>, theirs: Option<Place>) -> Option<Place> {
+    match (&ours, &theirs) {
+        (Some(o), Some(t)) if t.geo.is_none() && o.text.trim() == t.text.trim() && (o.google_id.is_some() || o.geo_from_google.is_some()) => ours,
+        _ => theirs,
+    }
+}
+
+/// Which service finds places and draws the map.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+pub enum MapProvider {
+    /// OpenStreetMap's map, and Photon's search; no account needed
+    #[default]
+    OpenStreetMap,
+    /// Google's, with the person's own API key
+    Google,
+}
+
+impl MapProvider {
+    pub fn name(self) -> &'static str {
+        match self {
+            MapProvider::OpenStreetMap => "OpenStreetMap",
+            MapProvider::Google => "Google Maps",
+        }
     }
 }
 
@@ -39,7 +100,7 @@ pub fn set_place_text(p: &mut Option<Place>, text: &str) {
     } else if let Some(old) = p.as_mut().filter(|o| o.text.trim() == text.trim()) {
         old.text = text.to_string();
     } else {
-        *p = Some(Place { text: text.to_string(), geo: None });
+        *p = Some(Place { text: text.to_string(), ..Default::default() });
     }
 }
 
@@ -91,6 +152,11 @@ impl OpenIn {
         Some(match (self, geo) {
             (OpenIn::OpenStreetMap, Some((lat, lon))) => format!("https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=17/{lat}/{lon}"),
             (OpenIn::OpenStreetMap, None) => format!("https://www.openstreetmap.org/search?query={}", enc(text)),
+            // Google's own id finds the very place, the spot or not
+            (OpenIn::Google, _) if p.google_id.is_some() => {
+                let query = if text.is_empty() { p.geo.map(|(a, b)| format!("{},{}", geo_number(a), geo_number(b))).unwrap_or_default() } else { text.to_string() };
+                format!("https://www.google.com/maps/search/?api=1&query={}&query_place_id={}", enc(&query), enc(p.google_id.as_deref().unwrap_or("")))
+            }
             (OpenIn::Google, Some((lat, lon))) => format!("https://www.google.com/maps/search/?api=1&query={lat}%2C{lon}"),
             (OpenIn::Google, None) => format!("https://www.google.com/maps/search/?api=1&query={}", enc(text)),
             // the text names the pin
@@ -194,7 +260,7 @@ mod tests {
 
     #[test]
     fn open_in_links() {
-        let spot = Place { text: "Café Lisboa, Rua 1".into(), geo: Some((38.7, -9.140000)) };
+        let spot = Place { text: "Café Lisboa, Rua 1".into(), geo: Some((38.7, -9.140000)), ..Default::default() };
         let words = Place::named("Café Lisboa, Rua 1").unwrap();
         let links = |p: &Place| [OpenIn::OpenStreetMap, OpenIn::Google, OpenIn::Apple, OpenIn::MapApp].map(|o| o.link(p).unwrap());
         assert_eq!(
@@ -216,7 +282,7 @@ mod tests {
             ]
         );
         // a spot with no name still has a pin; nothing at all has no link
-        assert_eq!(OpenIn::Apple.link(&Place { text: " ".into(), geo: Some((1.0, 2.0)) }).as_deref(), Some("https://maps.apple.com/?ll=1,2&q=1%2C2"));
+        assert_eq!(OpenIn::Apple.link(&Place { text: " ".into(), geo: Some((1.0, 2.0)), ..Default::default() }).as_deref(), Some("https://maps.apple.com/?ll=1,2&q=1%2C2"));
         assert_eq!(OpenIn::Google.link(&Place::default()), None);
         // what is typed is sent whole: signs can't end the link early
         assert!(OpenIn::Google.link(&Place::named("A&B #2?x=1").unwrap()).unwrap().ends_with("query=A%26B%20%232%3Fx%3D1"));
@@ -226,12 +292,54 @@ mod tests {
     fn typing_keeps_the_spot_only_for_the_same_place() {
         let mut p = Place::of("Cafe", Some((1.0, 2.0)));
         set_place_text(&mut p, "Cafe ");
-        assert_eq!(p, Some(Place { text: "Cafe ".into(), geo: Some((1.0, 2.0)) }));
+        assert_eq!(p, Some(Place { text: "Cafe ".into(), geo: Some((1.0, 2.0)), ..Default::default() }));
         set_place_text(&mut p, "Cafe B");
-        assert_eq!(p, Some(Place { text: "Cafe B".into(), geo: None }));
+        assert_eq!(p, Some(Place { text: "Cafe B".into(), geo: None, ..Default::default() }));
         set_place_text(&mut p, "  ");
         assert_eq!(p, None);
-        assert_eq!(Place::of("", Some((1.0, 2.0))), Some(Place { text: String::new(), geo: Some((1.0, 2.0)) }));
+        assert_eq!(Place::of("", Some((1.0, 2.0))), Some(Place { text: String::new(), geo: Some((1.0, 2.0)), ..Default::default() }));
         assert_eq!(Place::of(" ", None), None);
+    }
+
+    fn google_place(from: NaiveDate) -> Place {
+        Place { text: "Café Lisboa, Rua 1".into(), geo: Some((38.7, -9.14)), google_id: Some("ChIJ1&2".into()), geo_from_google: Some(from) }
+    }
+
+    #[test]
+    fn a_google_place_opens_by_its_id() {
+        let d = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let p = google_place(d);
+        assert_eq!(OpenIn::Google.link(&p).unwrap(), "https://www.google.com/maps/search/?api=1&query=Caf%C3%A9%20Lisboa%2C%20Rua%201&query_place_id=ChIJ1%262");
+        // the other maps go by the spot
+        assert_eq!(OpenIn::MapApp.link(&p).unwrap(), "geo:38.7,-9.14");
+    }
+
+    #[test]
+    fn a_spot_from_google_is_kept_thirty_days_and_never_shared() {
+        let d = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let mut p = google_place(d);
+        assert_eq!(p.shared_geo(), None, "servers are not told it");
+        assert!(!p.expire(d + chrono::Duration::days(29)));
+        assert_eq!(p.geo, Some((38.7, -9.14)));
+        assert!(p.expire(d + chrono::Duration::days(30)));
+        assert_eq!((p.geo, p.geo_from_google, p.google_id.as_deref()), (None, None, Some("ChIJ1&2")), "the id stays");
+        assert!(!p.expire(d + chrono::Duration::days(90)));
+        // a spot of one's own is shared and kept
+        let mut own = Place::of("Home", Some((1.0, 2.0))).unwrap();
+        assert_eq!(own.shared_geo(), Some((1.0, 2.0)));
+        assert!(!own.expire(d + chrono::Duration::days(900)));
+    }
+
+    #[test]
+    fn a_server_sending_the_words_back_keeps_the_google_place() {
+        let d = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let ours = Some(google_place(d));
+        assert_eq!(from_server(ours.clone(), Place::named("Café Lisboa, Rua 1 ")), ours);
+        // changed on the server: theirs wins
+        assert_eq!(from_server(ours.clone(), Place::named("Elsewhere")), Place::named("Elsewhere"));
+        assert_eq!(from_server(ours.clone(), Place::of("Café Lisboa, Rua 1", Some((1.0, 2.0)))), Place::of("Café Lisboa, Rua 1", Some((1.0, 2.0))));
+        assert_eq!(from_server(ours, None), None);
+        // a place of one's own is the server's
+        assert_eq!(from_server(Place::of("Home", Some((1.0, 2.0))), Place::named("Home")), Place::named("Home"));
     }
 }

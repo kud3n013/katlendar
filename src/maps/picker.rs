@@ -6,9 +6,10 @@
 
 use eframe::egui::{self, vec2, Align, Key, Layout, Modifiers, RichText};
 
-use super::osm::{self, Answer, Found};
+use super::osm::{self, Answer, Ask, Found};
 use super::widget::{self, world, MapView};
-use crate::model::Place;
+use super::{google, Source};
+use crate::model::{MapProvider, Place};
 use crate::{icons, theme, tr, trf};
 
 /// How the dialog was closed.
@@ -32,7 +33,18 @@ struct Picker {
     /// the result the arrow keys are on
     sel: usize,
     /// the address at the pin, being looked up
-    reverse: Option<String>,
+    reverse: Option<Ask>,
+    /// where places are looked up and the map comes from
+    src: Source,
+    /// Google's session token, shared by a search and the details of the
+    /// place it ends in
+    session: String,
+    /// the details of a place picked from Google's search, being looked up
+    details: Option<Ask>,
+    /// Google's id for the place
+    place_id: Option<String>,
+    /// the pin is where Google put it, not where it was put by hand
+    google_geo: bool,
     /// the words were there when the dialog opened, so they are looked up at once
     at_once: bool,
     focus: bool,
@@ -41,10 +53,11 @@ struct Picker {
 }
 
 /// Opens the dialog `id` on `place`: on its pin when it has one, else
-/// looking up its words.
-pub fn open(ctx: &egui::Context, id: egui::Id, place: &Option<Place>) {
+/// looking up its words. Places come from `provider`.
+pub fn open(ctx: &egui::Context, id: egui::Id, place: &Option<Place>, provider: MapProvider) {
     let text = place.as_ref().map(|p| p.text.clone()).unwrap_or_default();
     let pin = place.as_ref().and_then(|p| p.geo);
+    let src = Source::of(provider);
     // with no pin, the map is where the last one was left
     let last = ctx.data(|d| d.get_temp::<MapView>(last_view()));
     let view = match pin {
@@ -52,13 +65,30 @@ pub fn open(ctx: &egui::Context, id: egui::Id, place: &Option<Place>) {
         None => last.unwrap_or(MapView { center: (30.0, 10.0), zoom: 2.0 }),
     };
     let listing = pin.is_none() && !text.trim().is_empty();
-    let p = Picker { query: text.clone(), text, pin, view, listing, results: Vec::new(), sel: 0, reverse: None, at_once: true, focus: true, seen: 0 };
+    let p = Picker {
+        query: text.clone(),
+        text,
+        pin,
+        view,
+        listing,
+        results: Vec::new(),
+        sel: 0,
+        reverse: None,
+        src,
+        session: google::new_session(),
+        details: None,
+        place_id: place.as_ref().and_then(|p| p.google_id.clone()),
+        google_geo: place.as_ref().is_some_and(|p| p.geo_from_google.is_some()),
+        at_once: true,
+        focus: true,
+        seen: 0,
+    };
     ctx.data_mut(|d| d.insert_temp(id, p));
 }
 
 /// Test aid: opens the dialog searching `words` at once.
-pub fn open_searching(ctx: &egui::Context, id: egui::Id, place: &Option<Place>, words: &str) {
-    open(ctx, id, place);
+pub fn open_searching(ctx: &egui::Context, id: egui::Id, place: &Option<Place>, provider: MapProvider, words: &str) {
+    open(ctx, id, place, provider);
     let Some(mut p) = ctx.data(|d| d.get_temp::<Picker>(id)) else { return };
     if !words.trim().is_empty() {
         (p.query, p.listing, p.at_once) = (words.to_string(), true, true);
@@ -105,7 +135,11 @@ pub fn show(ctx: &egui::Context, id: egui::Id) -> Option<Closed> {
     let mut note: Option<(String, bool)> = None;
     let q = p.query.trim().to_string();
     if p.listing && q.chars().count() >= 2 {
-        let url = osm::search_url(&q, Some((p.view.center, p.view.zoom)));
+        let near = Some((p.view.center, p.view.zoom));
+        let url = match p.src {
+            Source::Osm => Ask::photon(osm::search_url(&q, near)),
+            Source::Google => google::suggest(&q, &p.session, near),
+        };
         let wait = if p.at_once { std::time::Duration::ZERO } else { osm::PAUSE };
         match lookups.get(&url, wait) {
             Answer::Found(r) => {
@@ -127,7 +161,10 @@ pub fn show(ctx: &egui::Context, id: egui::Id) -> Option<Closed> {
             Answer::Found(r) => {
                 p.reverse = None;
                 match r.first() {
-                    Some(f) => p.text = f.text.clone(),
+                    Some(f) => {
+                        p.text = f.text.clone();
+                        p.place_id = f.place_id.clone();
+                    }
                     None => p.text.clear(),
                 }
             }
@@ -138,14 +175,34 @@ pub fn show(ctx: &egui::Context, id: egui::Id) -> Option<Closed> {
             }
         }
     }
+    // the spot of a place picked from Google's search, which ends its session
+    if let Some(ask) = p.details.clone() {
+        match lookups.get(&ask, std::time::Duration::ZERO) {
+            Answer::Found(r) => {
+                p.details = None;
+                p.session = google::new_session();
+                if let Some((f, geo)) = r.first().and_then(|f| Some((f, f.geo?))) {
+                    p.pin = Some(geo);
+                    p.google_geo = true;
+                    p.view = fit(f, geo, map_size(ctx));
+                    p.place_id = f.place_id.clone().or(p.place_id.take());
+                }
+            }
+            Answer::Waiting => {}
+            Answer::Failed(e) => {
+                p.details = None;
+                p.session = google::new_session();
+                note = Some((trf("The place can't be looked up: {}", &[&e]), true));
+            }
+        }
+    }
     if p.pin.is_some() && p.reverse.is_none() && p.text.trim().is_empty() && note.is_none() {
         note = Some((tr("No address is known here; name the place yourself.").to_string(), false));
     }
 
-    let screen = ctx.content_rect();
-    let w = (screen.width() - 56.0).clamp(280.0, 620.0);
-    let map_size = vec2(w, (screen.height() - 290.0).clamp(150.0, 340.0));
-    let can_use = p.pin.is_some() && !p.text.trim().is_empty() && p.reverse.is_none();
+    let map_size = map_size(ctx);
+    let w = map_size.x;
+    let can_use = p.pin.is_some() && !p.text.trim().is_empty() && p.reverse.is_none() && p.details.is_none();
     let words = if p.text.trim().is_empty() { p.query.trim().to_string() } else { p.text.trim().to_string() };
     let mut closed = None;
 
@@ -164,7 +221,7 @@ pub fn show(ctx: &egui::Context, id: egui::Id) -> Option<Closed> {
         if listed {
             take = p.results.get(p.sel).cloned();
         } else if can_use {
-            closed = Some(Closed::Use(Place::of(&p.text, p.pin)));
+            closed = Some(Closed::Use(p.place(&p.text, p.pin)));
         }
     }
     if esc {
@@ -195,10 +252,17 @@ pub fn show(ctx: &egui::Context, id: egui::Id) -> Option<Closed> {
         }
         ui.add_space(4.0);
         map_rect = egui::Rect::from_min_size(ui.cursor().min, map_size);
-        let m = widget::pick(ui, &mut p.view, p.pin, map_size);
+        let m = widget::pick(ui, p.src, &mut p.view, p.pin, map_size);
         if let Some(spot) = m.clicked.or(m.pin_moved) {
+            // a spot put down by hand is one's own, and so is the address there
             p.pin = Some(spot);
-            p.reverse = Some(osm::reverse_url(spot));
+            p.google_geo = false;
+            p.place_id = None;
+            p.details = None;
+            p.reverse = Some(match p.src {
+                Source::Osm => Ask::photon(osm::reverse_url(spot)),
+                Source::Google => google::reverse(spot),
+            });
             p.listing = false;
         }
         ui.add_space(6.0);
@@ -206,7 +270,9 @@ pub fn show(ctx: &egui::Context, id: egui::Id) -> Option<Closed> {
             ui.label(RichText::new(tr("Saved as")).color(muted));
             ui.add(egui::TextEdit::singleline(&mut p.text).hint_text(tr("The name and address everyone sees")).desired_width(f32::INFINITY));
         });
-        let line = if p.reverse.is_some() {
+        let line = if p.details.is_some() {
+            Some((tr("Looking up the place…").to_string(), false))
+        } else if p.reverse.is_some() {
             Some((tr("Looking up the address…").to_string(), false))
         } else if searching {
             Some((tr("Searching…").to_string(), false))
@@ -224,11 +290,11 @@ pub fn show(ctx: &egui::Context, id: egui::Id) -> Option<Closed> {
         ui.horizontal(|ui| {
             let use_it = ui.add_enabled(can_use, egui::Button::new(RichText::new(tr("Use this place")).strong())).on_hover_text(tr("Enter"));
             if use_it.clicked() {
-                closed = Some(Closed::Use(Place::of(&p.text, p.pin)));
+                closed = Some(Closed::Use(p.place(&p.text, p.pin)));
             }
             let words_only = ui.add_enabled(!words.is_empty(), egui::Button::new(tr("Text only"))).on_hover_text(tr("Keep the words, without a spot on the map"));
             if words_only.clicked() {
-                closed = Some(Closed::Use(Place::of(&words, None)));
+                closed = Some(Closed::Use(p.place(&words, None)));
             }
             if ui.button(tr("Cancel")).on_hover_text(tr("Esc")).clicked() {
                 closed = Some(Closed::Cancel);
@@ -264,8 +330,21 @@ pub fn show(ctx: &egui::Context, id: egui::Id) -> Option<Closed> {
         });
     }
     if let Some(f) = take {
-        p.view = fit(&f, map_size);
-        p.pin = Some(f.geo);
+        match (f.geo, &f.place_id) {
+            (Some(geo), _) => {
+                p.view = fit(&f, geo, map_size);
+                p.pin = Some(geo);
+                p.google_geo = p.src == Source::Google;
+                p.details = None;
+            }
+            // Google's spot comes with the place's details
+            (None, Some(id)) => {
+                p.pin = None;
+                p.details = Some(google::details(id, &p.session));
+            }
+            (None, None) => {}
+        }
+        p.place_id = f.place_id.clone();
         p.text = f.text.clone();
         p.query = f.name.clone();
         p.listing = false;
@@ -284,10 +363,30 @@ pub fn show(ctx: &egui::Context, id: egui::Id) -> Option<Closed> {
     closed
 }
 
-/// The view that shows a result whole: a town or country fills the map,
-/// a building is seen close up.
-fn fit(f: &Found, size: egui::Vec2) -> MapView {
-    let Some([s, w, n, e]) = f.extent else { return MapView { center: f.geo, zoom: 17.0 } };
+impl Picker {
+    /// The place to use: `text` at `pin`, with Google's id, and when the
+    /// spot is Google's, the day it was had.
+    fn place(&self, text: &str, pin: Option<(f64, f64)>) -> Option<Place> {
+        let mut place = Place::of(text, pin)?;
+        place.google_id = self.place_id.clone();
+        if self.google_geo && place.geo.is_some() {
+            place.geo_from_google = Some(crate::app::App::now().date());
+        }
+        Some(place)
+    }
+}
+
+/// The size of the dialog's map in this window.
+fn map_size(ctx: &egui::Context) -> egui::Vec2 {
+    let screen = ctx.content_rect();
+    let w = (screen.width() - 56.0).clamp(280.0, 620.0);
+    vec2(w, (screen.height() - 290.0).clamp(150.0, 340.0))
+}
+
+/// The view that shows a result at `geo` whole: a town or country fills
+/// the map, a building is seen close up.
+fn fit(f: &Found, geo: (f64, f64), size: egui::Vec2) -> MapView {
+    let Some([s, w, n, e]) = f.extent else { return MapView { center: geo, zoom: 17.0 } };
     let (x0, y0) = world(n, w, 0.0);
     let (x1, y1) = world(s, e, 0.0);
     let (dx, dy) = ((x1 - x0).abs().max(1e-9), (y1 - y0).abs().max(1e-9));
@@ -320,10 +419,10 @@ mod tests {
     fn the_keys_go_through_the_results_and_use_one() {
         let ctx = egui::Context::default();
         let id = egui::Id::unique("test picker");
-        open_searching(&ctx, id, &None, "corner cafe");
+        open_searching(&ctx, id, &None, MapProvider::OpenStreetMap, "corner cafe");
         assert!(frame(&ctx, id, vec![]).is_none());
-        let place = |name: &str, geo| Found { name: name.into(), detail: "London".into(), text: format!("{name}, London"), geo, extent: None };
-        let url = osm::search_url("corner cafe", Some(((30.0, 10.0), 2.0)));
+        let place = |name: &str, geo| Found { name: name.into(), detail: "London".into(), text: format!("{name}, London"), geo: Some(geo), extent: None, place_id: None };
+        let url = Ask::photon(osm::search_url("corner cafe", Some(((30.0, 10.0), 2.0))));
         osm::lookups(&ctx).answer(&url, Answer::Found(vec![place("Corner Cafe", (51.5, -0.1)), place("Corner Cafe Two", (51.6, -0.2))]));
         frame(&ctx, id, vec![]);
         assert_eq!(state(&ctx, id).results.len(), 2);
@@ -347,7 +446,7 @@ mod tests {
         let ctx = egui::Context::default();
         let id = egui::Id::unique("esc picker");
         let place = Place::of("Home", None);
-        open(&ctx, id, &place);
+        open(&ctx, id, &place, MapProvider::OpenStreetMap);
         frame(&ctx, id, vec![]);
         assert!(state(&ctx, id).listing, "words with no spot are looked up at once");
         assert!(frame(&ctx, id, vec![key(Key::Escape)]).is_none());
@@ -357,12 +456,49 @@ mod tests {
 
     #[test]
     fn a_town_fills_the_map_and_a_house_is_close_up() {
-        let house = Found { name: "1".into(), detail: String::new(), text: "1".into(), geo: (51.5, -0.12), extent: None };
-        assert_eq!(fit(&house, vec2(400.0, 300.0)), MapView { center: (51.5, -0.12), zoom: 17.0 });
+        let house = Found { name: "1".into(), detail: String::new(), text: "1".into(), geo: Some((51.5, -0.12)), extent: None, place_id: None };
+        assert_eq!(fit(&house, (51.5, -0.12), vec2(400.0, 300.0)), MapView { center: (51.5, -0.12), zoom: 17.0 });
         // Paris, about 0.25 degrees wide
         let town = Found { extent: Some([48.81, 2.22, 48.90, 2.47]), ..house };
-        let v = fit(&town, vec2(400.0, 300.0));
+        let v = fit(&town, (48.85, 2.35), vec2(400.0, 300.0));
         assert!((10.0..12.0).contains(&v.zoom), "zoom {}", v.zoom);
         assert!((v.center.0 - 48.855).abs() < 0.01 && (v.center.1 - 2.345).abs() < 0.01, "{:?}", v.center);
+    }
+
+    #[test]
+    fn a_place_from_google_gets_its_spot_from_its_details() {
+        google::set_key(Some("test key".into()));
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique("google picker");
+        open_searching(&ctx, id, &None, MapProvider::Google, "cafe lisboa");
+        frame(&ctx, id, vec![]);
+        let first = state(&ctx, id);
+        assert_eq!(first.src, Source::Google);
+        let lookups = osm::lookups(&ctx);
+        let search = google::suggest("cafe lisboa", &first.session, Some(((30.0, 10.0), 2.0)));
+        let suggestion = Found { name: "Café Lisboa".into(), detail: "Lisbon".into(), text: "Café Lisboa, Lisbon".into(), geo: None, extent: None, place_id: Some("PID".into()) };
+        lookups.answer(&search, Answer::Found(vec![suggestion]));
+        frame(&ctx, id, vec![]);
+        // Enter takes it: its details are asked in the same session
+        frame(&ctx, id, vec![key(Key::Enter)]);
+        let p = state(&ctx, id);
+        assert_eq!(p.details, Some(google::details("PID", &first.session)));
+        assert_eq!((p.pin, p.text.as_str()), (None, "Café Lisboa, Lisbon"));
+        assert!(frame(&ctx, id, vec![key(Key::Enter)]).is_none(), "nothing to use before the spot is here");
+        let spot = Found { name: String::new(), detail: String::new(), text: "R. Augusta, Lisboa".into(), geo: Some((38.71, -9.137)), extent: None, place_id: Some("PID".into()) };
+        lookups.answer(&google::details("PID", &first.session), Answer::Found(vec![spot]));
+        frame(&ctx, id, vec![]);
+        let p = state(&ctx, id);
+        assert_eq!((p.pin, p.google_geo, p.details.is_none()), (Some((38.71, -9.137)), true, true));
+        assert_ne!(p.session, first.session, "the details end the session");
+        assert_eq!(p.text, "Café Lisboa, Lisbon", "the words picked stay");
+        match frame(&ctx, id, vec![key(Key::Enter)]) {
+            Some(Closed::Use(Some(place))) => {
+                assert_eq!((place.text.as_str(), place.geo, place.google_id.as_deref()), ("Café Lisboa, Lisbon", Some((38.71, -9.137)), Some("PID")));
+                assert!(place.geo_from_google.is_some(), "Google's spot is marked so it is let go in time");
+                assert_eq!(place.shared_geo(), None);
+            }
+            _ => panic!("Enter uses the place"),
+        }
     }
 }

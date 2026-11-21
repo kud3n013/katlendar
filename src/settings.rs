@@ -185,6 +185,62 @@ fn row(ui: &mut egui::Ui, label: &str, tip: &str, add: impl FnOnce(&mut egui::Ui
     });
 }
 
+/// What the Maps page knows of the Google key: what is being typed, and
+/// how keeping the last one went.
+#[derive(Clone, Default)]
+struct KeyField {
+    text: String,
+    /// the saved key is being replaced
+    changing: bool,
+    kept: std::sync::Arc<std::sync::Mutex<Option<Result<(), String>>>>,
+}
+
+/// The Google Maps API key: typed in hidden, kept in the keyring, and
+/// never shown again once saved.
+fn google_key_row(ui: &mut egui::Ui, allow_file: bool) {
+    let id = ids::maps_key("field");
+    let mut f = ui.data(|d| d.get_temp::<KeyField>(id)).unwrap_or_default();
+    let has_key = crate::maps::google::key().is_some();
+    let tip = tr("A key from the Google Cloud console with the Places API (New), Geocoding API and Map Tiles API turned on. It is kept in the keyring and is billed to its project.");
+    row(ui, tr("Google API key"), tip, |ui| {
+        let save = |f: &mut KeyField, key: String| {
+            f.text.clear();
+            f.changing = false;
+            let kept = f.kept.clone();
+            *kept.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            crate::maps::google::save_key(key, allow_file, move |r| *kept.lock().unwrap_or_else(|e| e.into_inner()) = Some(r));
+        };
+        if has_key && !f.changing {
+            if ui.button(tr("Remove")).clicked() {
+                save(&mut f, String::new());
+            }
+            if ui.button(tr("Change")).clicked() {
+                f.changing = true;
+            }
+            ui.label(RichText::new(tr("Saved in the keyring")).weak());
+        } else {
+            let can = !f.text.trim().is_empty();
+            let w = (ui.available_width() - 90.0).max(80.0);
+            let r = ui.add(egui::TextEdit::singleline(&mut f.text).password(true).hint_text(tr("Paste the key")).desired_width(w));
+            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+            if ui.add_enabled(can, egui::Button::new(tr("Save"))).clicked() || (enter && can) {
+                let key = f.text.clone();
+                save(&mut f, key);
+            }
+        }
+    });
+    let kept = f.kept.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let line = match kept {
+        Some(Err(e)) => Some(trf("The key couldn't be kept: {}", &[&e])),
+        _ if !has_key => Some(tr("Until a key is saved, places come from OpenStreetMap.").to_string()),
+        _ => None,
+    };
+    if let Some(line) = line.filter(|_| !finding(ui)) {
+        ui.label(RichText::new(line).size(theme::size::CAPTION).weak());
+    }
+    ui.data_mut(|d| d.insert_temp(id, f));
+}
+
 fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, value: &mut T, options: &[(T, String)]) {
     let current = options.iter().find(|(v, _)| v == value).map(|(_, l)| l.clone()).unwrap_or_default();
     let cw = ui.data(|d| d.get_temp::<f32>(ids::control_w())).unwrap_or(CONTROL_W);
@@ -432,6 +488,14 @@ impl App {
             let opts: Vec<(OpenIn, String)> = OpenIn::all().into_iter().map(|o| (o, o.name().to_string())).collect();
             combo(ui, "op", &mut p.open_places_in, &opts);
         });
+        row(ui, tr("Find places with"), tr("Where places are looked up and the map under a place comes from. Google Maps needs an API key of your own."), |ui| {
+            let opts: Vec<(MapProvider, String)> = [MapProvider::OpenStreetMap, MapProvider::Google].into_iter().map(|m| (m, m.name().to_string())).collect();
+            combo(ui, "mp", &mut p.map_provider, &opts);
+        });
+        if p.map_provider == MapProvider::Google {
+            let allow_file = p.plaintext_secrets;
+            google_key_row(ui, allow_file);
+        }
     }
 
     fn page_general(&mut self, ui: &mut egui::Ui) {

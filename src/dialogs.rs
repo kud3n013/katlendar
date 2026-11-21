@@ -486,12 +486,12 @@ pub(crate) fn swatches(ui: &mut egui::Ui, base: [u8; 3], base_tip: &str, color: 
 /// text forgets the spot on the map the old one had.
 /// Beside it, a button that finds the place on a map, and one that shows
 /// it on the map `open` names. `salt` tells the editors' pickers apart.
-fn place_field(ui: &mut egui::Ui, salt: &str, place: &mut Option<Place>, open: OpenIn) {
+fn place_field(ui: &mut egui::Ui, salt: &str, place: &mut Option<Place>, open: OpenIn, provider: MapProvider) {
     let picker = crate::ids::place_picker(salt);
     // test aid: the first field drawn opens its picker
     if let Some(words) = &crate::testaid::get().pick {
         static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| crate::maps::picker::open_searching(ui.ctx(), picker, place, words));
+        ONCE.call_once(|| crate::maps::picker::open_searching(ui.ctx(), picker, place, provider, words));
     }
     ui.horizontal(|ui| {
         // a window that can't be changed has its own, enabled one
@@ -505,7 +505,7 @@ fn place_field(ui: &mut egui::Ui, salt: &str, place: &mut Option<Place>, open: O
             set_place_text(place, &text);
         }
         if find && ui.button(icons::MAP_PIN).on_hover_text(tr("Find on the map")).clicked() {
-            crate::maps::picker::open(ui.ctx(), picker, place);
+            crate::maps::picker::open(ui.ctx(), picker, place, provider);
         }
         if let Some(url) = link {
             open_place_button(ui, &url, open, false);
@@ -519,12 +519,13 @@ fn place_field(ui: &mut egui::Ui, salt: &str, place: &mut Option<Place>, open: O
 
 /// The map under a place whose spot is known, which can be dragged and
 /// zoomed. It starts on the spot, and goes back there when the spot changes.
-fn place_map(ui: &mut egui::Ui, salt: &str, spot: (f64, f64)) {
+/// The map comes from `provider`.
+fn place_map(ui: &mut egui::Ui, salt: &str, spot: (f64, f64), provider: MapProvider) {
     let id = crate::ids::place_map(salt);
     let kept = ui.data(|d| d.get_temp::<(crate::maps::MapView, (f64, f64))>(id));
     let mut view = kept.filter(|k| k.1 == spot).map(|k| k.0).unwrap_or(crate::maps::MapView { center: spot, zoom: 16.0 });
     let size = egui::vec2(ui.available_width().max(160.0), 160.0);
-    crate::maps::show(ui, &mut view, Some(spot), size);
+    crate::maps::show(ui, crate::maps::Source::of(provider), &mut view, Some(spot), size);
     ui.data_mut(|d| d.insert_temp(id, (view, spot)));
 }
 
@@ -784,7 +785,7 @@ impl App {
                     }
 
                     label(ui, tr("Location"));
-                    place_field(ui, "create", &mut c.ev.place, p.open_places_in);
+                    place_field(ui, "create", &mut c.ev.place, p.open_places_in, p.map_provider);
                     ui.end_row();
 
                     label(ui, tr("Notes"));
@@ -1491,6 +1492,7 @@ impl App {
         // a read-only event: only Skip and the side notes can change
         let locked = if ed.is_new { None } else { self.data.locked(&ed.ev) };
         let open = self.data.prefs.open_places_in;
+        let provider = self.data.prefs.map_provider;
         if let Some(why) = locked {
             ui.label(RichText::new(why).size(theme::size::TINY).color(muted));
             ui.add_space(2.0);
@@ -1610,11 +1612,11 @@ impl App {
                     ui.end_row();
                     // a task's block has its task's place, in the task's fields
                     editor_label(ui, tr("Location"), muted);
-                    place_field(ui, "event", &mut ed.ev.place, open);
+                    place_field(ui, "event", &mut ed.ev.place, open, provider);
                     ui.end_row();
                     if let Some(spot) = ed.ev.place.as_ref().and_then(|p| p.geo).filter(|_| locked.is_none()) {
                         ui.label("");
-                        place_map(ui, "event", spot);
+                        place_map(ui, "event", spot, provider);
                         ui.end_row();
                     }
                     let day = ed.ev.start.date();
@@ -1639,7 +1641,7 @@ impl App {
             }
             if let Some(spot) = ed.ev.place.as_ref().and_then(|p| p.geo) {
                 ui.add_space(4.0);
-                place_map(ui, "event", spot);
+                place_map(ui, "event", spot, provider);
             }
         }
         if !is_task && !ed.ev.all_day {
@@ -1900,11 +1902,11 @@ impl App {
             });
             ui.end_row();
             editor_label(ui, tr("Location"), muted);
-            place_field(ui, "task", &mut ed.task.place, self.data.prefs.open_places_in);
+            place_field(ui, "task", &mut ed.task.place, self.data.prefs.open_places_in, self.data.prefs.map_provider);
             ui.end_row();
             if let Some(spot) = ed.task.place.as_ref().and_then(|p| p.geo) {
                 ui.label("");
-                place_map(ui, "task", spot);
+                place_map(ui, "task", spot, self.data.prefs.map_provider);
                 ui.end_row();
             }
             let day = ed.task.due.unwrap_or_else(|| chrono::Local::now().date_naive());
@@ -2156,13 +2158,13 @@ mod tests {
 
     #[test]
     fn typing_a_place_keeps_spaces_and_drops_the_old_spot() {
-        let mut p = Some(Place { text: "Room 4".into(), geo: Some((52.5, 13.4)) });
+        let mut p = Some(Place { text: "Room 4".into(), geo: Some((52.5, 13.4)), ..Default::default() });
         // a space being typed stays, and the spot with it
         set_place_text(&mut p, "Room 4 ");
-        assert_eq!(p, Some(Place { text: "Room 4 ".into(), geo: Some((52.5, 13.4)) }));
+        assert_eq!(p, Some(Place { text: "Room 4 ".into(), geo: Some((52.5, 13.4)), ..Default::default() }));
         // another place: the spot belonged to the old one
         set_place_text(&mut p, "Room 5");
-        assert_eq!(p, Some(Place { text: "Room 5".into(), geo: None }));
+        assert_eq!(p, Some(Place { text: "Room 5".into(), geo: None, ..Default::default() }));
         set_place_text(&mut p, "  ");
         assert_eq!(p, None);
     }
