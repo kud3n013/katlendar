@@ -897,3 +897,25 @@ fn a_synced_lists_title_starts_with_its_service() {
     // the name itself is kept as it was, for the editor and the server
     assert_eq!(d.list_look(1).0, "Inbox");
 }
+
+#[test]
+fn deadlines_go_by_priority_until_put_in_order_by_hand() {
+    let mut d = empty();
+    let day = ymd(11, 20);
+    let due = |id: u64, priority: u8| Task { id, title: format!("t{id}"), due: Some(day), priority, ..Default::default() };
+    // none, low, high, medium; a finished one and one due elsewhere are left out
+    d.tasks = vec![due(1, 0), due(2, 7), due(3, 1), due(4, 5), Task { done: true, ..due(5, 1) }, Task { due: Some(ymd(11, 21)), ..due(6, 1) }];
+    assert_eq!(d.deadlines_on(day), vec![3, 4, 2, 1]);
+
+    // by hand: the low one first, the high one last
+    d.order_deadlines(day, &[2, 1, 4, 3]);
+    assert_eq!(d.deadlines_on(day), vec![2, 1, 4, 3]);
+
+    // a new one goes before the first of a lower priority: here the low one
+    d.tasks.push(due(7, 4));
+    assert_eq!(d.deadlines_on(day), vec![7, 2, 1, 4, 3]);
+
+    // an order kept for another day does not count once the due date moves
+    d.task_mut(1).unwrap().due_order = Some((ymd(11, 19), 0));
+    assert_eq!(d.deadlines_on(day), vec![7, 2, 4, 3, 1]);
+}

@@ -285,6 +285,7 @@ impl eframe::App for App {
         let drag_aid_on = self.shot.is_some() && testaid::get().drag.is_some();
         if !ctx.input(|i| i.pointer.any_down()) && !drag_aid_on {
             self.drag_task = None;
+            self.drag_due = None;
         }
         // keep the clock line moving
         ctx.request_repaint_after(std::time::Duration::from_secs(CLOCK_REFRESH_S));

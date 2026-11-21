@@ -249,6 +249,14 @@ pub struct App {
     pub frame_editor: Option<FrameEdit>,
     pub drag: Option<Drag>,
     pub drag_task: Option<u64>,
+    /// the deadline lifted off the calendar's all-day rows, when that is
+    /// what `drag_task` carries
+    pub drag_due: Option<u64>,
+    /// a deadline let go in the hours, waiting for a yes before its session
+    /// is planned there
+    pub due_plan: Option<crate::views::DuePlan>,
+    /// where the deadlines were last drawn, for their motion
+    pub due_chips: crate::views::DueChips,
     pub ctx_target: Option<u64>,
     /// the frame (and its day) under the last right-click, if no event was
     pub ctx_frame: Option<(u64, NaiveDate)>,
@@ -420,6 +428,9 @@ impl App {
             frame_editor: None,
             drag: None,
             drag_task: None,
+            drag_due: None,
+            due_plan: None,
+            due_chips: Default::default(),
             ctx_target: None,
             ctx_frame: None,
             slide: motion::Slide::default(),

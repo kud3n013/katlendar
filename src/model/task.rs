@@ -48,6 +48,11 @@ pub struct Task {
     /// Put away from the Completed list; still kept and synced.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
+    /// Its place among the deadlines of a day, once they were put in order
+    /// by hand; it counts only while that day is still its due date. Never
+    /// sent to a server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_order: Option<(NaiveDate, u32)>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -119,6 +124,28 @@ impl Data {
             self.prefs.inbox_icon = look.2;
         }
     }
+    /// The open tasks due on `day`, as the calendar lists them: those put in
+    /// order by hand keep that order, and the rest go by priority, each
+    /// before the first one of a lower priority.
+    pub fn deadlines_on(&self, day: NaiveDate) -> Vec<u64> {
+        let mut open: Vec<&Task> = self.tasks.iter().filter(|t| !t.done && t.due == Some(day)).collect();
+        open.sort_by_key(|t| (t.rank(), t.title.to_lowercase(), t.id));
+        let (mut placed, rest): (Vec<&Task>, Vec<&Task>) = open.into_iter().partition(|t| t.hand_place(day).is_some());
+        placed.sort_by_key(|t| t.hand_place(day));
+        for t in rest {
+            let at = placed.iter().position(|o| o.rank() > t.rank()).unwrap_or(placed.len());
+            placed.insert(at, t);
+        }
+        placed.into_iter().map(|t| t.id).collect()
+    }
+    /// Puts the deadlines of `day` in this order by hand.
+    pub fn order_deadlines(&mut self, day: NaiveDate, ids: &[u64]) {
+        for (i, id) in ids.iter().enumerate() {
+            if let Some(t) = self.task_mut(*id) {
+                t.due_order = Some((day, i as u32));
+            }
+        }
+    }
     /// Removes one of one's own lists; its tasks go to the Inbox.
     pub fn remove_own_list(&mut self, id: u64) {
         self.lists.retain(|l| l.id != id);
@@ -139,6 +166,14 @@ impl TaskList {
 }
 
 impl Task {
+    /// Its priority as a sort key: highest first, none last.
+    pub fn rank(&self) -> u8 {
+        if self.priority == 0 { 10 } else { self.priority }
+    }
+    /// Where it was put by hand among the deadlines of `day`.
+    fn hand_place(&self, day: NaiveDate) -> Option<u32> {
+        self.due_order.filter(|(d, _)| *d == day).map(|(_, i)| i)
+    }
     /// Forgets where the task lives on a server: it becomes a new one.
     /// Takes what the task window edits from `n`. What came in from the
     /// server while the window was open (its version) stays.

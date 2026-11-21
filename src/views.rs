@@ -33,6 +33,35 @@ struct Item {
     skipped: bool,
 }
 
+/// A deadline let go in the hours: its session is planned there once the
+/// person says so.
+pub struct DuePlan {
+    pub task: u64,
+    pub start: NaiveDateTime,
+    /// where its block was last drawn, to fly back from when it is not
+    pub at: Rect,
+}
+
+/// The deadlines on the all-day rows as last drawn, so they can glide to a
+/// new place, fade in when they come into view and fade out when they go.
+#[derive(Default)]
+pub struct DueChips {
+    /// each one's place (from the top left of the day columns), title, and
+    /// whether it was only the gap held open for one being carried
+    last: std::collections::HashMap<u64, (Rect, String, bool)>,
+    /// when each one came into view
+    born: std::collections::HashMap<u64, f64>,
+    /// ones gone from view, fading out where they were
+    gone: Vec<(Rect, String, f64)>,
+    /// the first day, number of days and column width they were laid out for
+    geom: Option<(NaiveDate, usize, i32)>,
+    /// the all-day area as last drawn
+    head: Option<Rect>,
+    /// one to fly back to its day from a place on screen, and until when
+    pub from: Option<(u64, Rect)>,
+    flight: Option<(u64, f64)>,
+}
+
 /// Where one day's stretch of a frame was painted.
 struct FrameBox {
     id: u64,
@@ -251,6 +280,129 @@ impl App {
         self.say(ctx, trf("Due date set to {}", &[&d.format("%b %-d")]), true);
     }
 
+    /// Lets a deadline go on the all-day rows: it moves to `day`, and that
+    /// day keeps `order` (with it in its place) as its order by hand.
+    fn drop_deadline(&mut self, ctx: &egui::Context, tid: u64, day: NaiveDate, order: &[u64]) {
+        let Some(t) = self.data.task(tid) else { return };
+        let moved = t.due != Some(day);
+        if !moved && self.data.deadlines_on(day) == order {
+            return;
+        }
+        self.snapshot();
+        if let Some(t) = self.data.task_mut(tid) {
+            t.due = Some(day);
+        }
+        self.data.order_deadlines(day, order);
+        self.commit();
+        if moved {
+            self.say(ctx, trf("Due date set to {}", &[&day.format("%b %-d")]), true);
+        }
+    }
+
+    /// Paints each day's deadlines and gives back where each one is, to be
+    /// clicked or dragged. They glide to a new place, wherever their due
+    /// date was changed; ones coming into view fade in, ones leaving fade
+    /// out, and the others close up. `gap` is the one being carried: only
+    /// an outline where it would land. `at` is the left of the day columns,
+    /// the top of the all-day area, the top of the deadline rows and the
+    /// column width.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_deadlines(
+        &mut self,
+        ctx: &egui::Context,
+        hp: &egui::Painter,
+        hresp: &egui::Response,
+        due_by_day: &[Vec<u64>],
+        gap: Option<u64>,
+        at: (f32, f32, f32, f32),
+        snap: bool,
+        now: f64,
+    ) -> Vec<(u64, Rect)> {
+        let (x0, top, rows_top, col_w) = at;
+        let origin = vec2(x0, top);
+        let mut out = vec![];
+        let mut shown = std::collections::HashMap::new();
+        // one coming back flies over everything, from where it was let go
+        if let Some((tid, r)) = self.due_chips.from.take() {
+            let key = ids::due_chip(tid);
+            ctx.animate_value_with_time(key.with("x"), r.left() - x0, 0.0);
+            ctx.animate_value_with_time(key.with("y"), r.top() - top, 0.0);
+            self.due_chips.flight = Some((tid, now + motion::LONG.secs() as f64));
+            self.due_chips.last.insert(tid, (r.translate(-origin), String::new(), false));
+        }
+        let flying = self.due_chips.flight.filter(|f| now < f.1).map(|f| f.0);
+        let fly_layer = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, ids::due_fly()));
+        for (i, list) in due_by_day.iter().enumerate() {
+            for (k, tid) in list.iter().enumerate() {
+                let Some(t) = self.data.task(*tid) else { continue };
+                let y = rows_top + k as f32 * 22.0;
+                let goal = Rect::from_min_max(pos2(x0 + i as f32 * col_w + 2.0, y), pos2(x0 + (i + 1) as f32 * col_w - 4.0, y + 20.0));
+                let is_gap = gap == Some(*tid);
+                let fresh = !self.due_chips.last.contains_key(tid);
+                let secs = if snap || fresh {
+                    0.0
+                } else if flying == Some(*tid) {
+                    motion::LONG.secs()
+                } else {
+                    motion::NORMAL.secs()
+                };
+                let key = ids::due_chip(*tid);
+                let ax = ctx.animate_value_with_time(key.with("x"), goal.left() - x0, secs);
+                let ay = ctx.animate_value_with_time(key.with("y"), goal.top() - top, secs);
+                let r = Rect::from_min_size(pos2(x0 + ax, top + ay), goal.size());
+                // new in view: it fades in where it belongs
+                let born = *self.due_chips.born.entry(*tid).or_insert(if fresh && !snap { now } else { f64::NEG_INFINITY });
+                let alpha = motion::ease_in_out(((now - born) as f32 / motion::LONG.secs().max(0.001)).min(1.0));
+                if alpha < 1.0 {
+                    ctx.request_repaint();
+                }
+                let mut p = if flying == Some(*tid) { fly_layer.clone() } else { hp.clone() };
+                p.multiply_opacity(alpha);
+                if is_gap {
+                    let accent = self.pal.accent;
+                    p.rect_filled(r, 4.0, mix(self.pal.bg, accent, 0.12));
+                    p.rect_stroke(r, 4.0, Stroke::new(1.5, accent), StrokeKind::Inside);
+                    let c = p.with_clip_rect(r.shrink(2.0).intersect(p.clip_rect()));
+                    c.text(r.left_center() + vec2(5.0, 0.0), Align2::LEFT_CENTER, icons::FLAG, FontId::proportional(theme::size::SMALL), self.pal.muted);
+                    c.text(r.left_center() + vec2(22.0, 0.0), Align2::LEFT_CENTER, &t.title, theme::bold(theme::size::SMALL), self.pal.muted);
+                } else {
+                    let over = hresp.hover_pos().is_some_and(|q| r.contains(q));
+                    let glow = ctx.animate_bool_with_time(ids::due_glow(*tid), over, motion::HOVER.secs());
+                    self.paint_deadline(&p, r, &t.title, glow);
+                    out.push((*tid, r));
+                }
+                shown.insert(*tid, (r.translate(-origin), t.title.clone(), is_gap));
+            }
+        }
+        // gone from view: it fades out where it was while the others close up
+        if !snap {
+            for (tid, (r, title, was_gap)) in &self.due_chips.last {
+                if !shown.contains_key(tid) && !was_gap && !title.is_empty() && self.drag_due != Some(*tid) && self.due_plan.as_ref().is_none_or(|p| p.task != *tid) {
+                    self.due_chips.gone.push((*r, title.clone(), now));
+                }
+            }
+        }
+        self.due_chips.born.retain(|tid, _| shown.contains_key(tid));
+        self.due_chips.gone.retain(|g| now - g.2 < motion::NORMAL.secs() as f64);
+        for (r, title, since) in self.due_chips.gone.clone() {
+            let mut p = hp.clone();
+            p.multiply_opacity(1.0 - ((now - since) as f32 / motion::NORMAL.secs().max(0.001)).min(1.0));
+            self.paint_deadline(&p, r.translate(origin), &title, 0.0);
+            ctx.request_repaint();
+        }
+        self.due_chips.last = shown;
+        out
+    }
+
+    /// One deadline on the all-day rows: a flag and the task's title.
+    fn paint_deadline(&self, p: &egui::Painter, r: Rect, title: &str, glow: f32) {
+        p.rect_filled(r, 4.0, mix(self.pal.bg, self.pal.text, 0.03 + 0.07 * glow));
+        p.rect_stroke(r, 4.0, Stroke::new(1.0, mix(self.pal.border, self.pal.text, 0.25)), StrokeKind::Inside);
+        let c = p.with_clip_rect(r.shrink(2.0).intersect(p.clip_rect()));
+        c.text(r.left_center() + vec2(5.0, 0.0), Align2::LEFT_CENTER, icons::FLAG, FontId::proportional(theme::size::SMALL), self.pal.text);
+        c.text(r.left_center() + vec2(22.0, 0.0), Align2::LEFT_CENTER, title, theme::bold(theme::size::SMALL), self.pal.text);
+    }
+
     pub fn ui_drag_ghost(&mut self, ctx: &egui::Context) {
         let Some(id) = self.drag_task else { return };
         let Some(pos) = ctx.input(|i| i.pointer.latest_pos()) else { return };
@@ -315,23 +467,46 @@ impl App {
             }
             placed.push((e, row));
         }
-        // due dates of open tasks sit under the all-day events
-        let due_by_day: Vec<Vec<(u64, String)>> = days
-            .iter()
-            .map(|d| {
-                if !self.data.prefs.due_on_calendar {
-                    return vec![];
-                }
-                self.data.tasks.iter().filter(|t| !t.done && t.due == Some(*d)).map(|t| (t.id, t.title.clone())).collect()
-            })
-            .collect();
-        let due_rows = due_by_day.iter().map(|v| v.len()).max().unwrap_or(0);
+        // deadlines of open tasks sit under the all-day events, each day's by
+        // priority unless put in order by hand. One lifted off is taken out
+        // of its day, and the day under the pointer opens a gap where it
+        // would land, so the others move aside.
+        let ctx = ui.ctx().clone();
+        let now_s = ctx.input(|i| i.time);
+        let top = ui.cursor().top();
+        let x0 = ui.cursor().left() + GUTTER_W;
         let ev_rows = row_end.len();
+        let rows_top = top + 47.0 + ev_rows as f32 * 22.0;
+        let on = self.data.prefs.due_on_calendar;
+        let mut due_by_day: Vec<Vec<u64>> = days.iter().map(|d| if on { self.data.deadlines_on(*d) } else { vec![] }).collect();
+        let lifted = self.drag_task.filter(|t| self.drag_due == Some(*t)).or(self.due_plan.as_ref().map(|p| p.task));
+        if let Some(tid) = lifted {
+            due_by_day.iter_mut().for_each(|v| v.retain(|x| *x != tid));
+        }
+        let mut slot: Option<(usize, u64)> = None;
+        if let Some(tid) = self.drag_task.filter(|_| on) {
+            let head = self.due_chips.head.unwrap_or(Rect::NOTHING);
+            let pos = ctx.input(|i| i.pointer.latest_pos());
+            if let Some(q) = pos.filter(|q| !self.over_flyer(*q) && head.contains(*q) && q.x >= x0 && q.y > top + 44.0) {
+                let di = (((q.x - x0) / col_w) as usize).min(n - 1);
+                due_by_day.iter_mut().for_each(|v| v.retain(|x| *x != tid));
+                let k = (((q.y - rows_top) / 22.0).floor().max(0.0) as usize).min(due_by_day[di].len());
+                due_by_day[di].insert(k, tid);
+                slot = Some((di, tid));
+            }
+        }
+        let due_rows = due_by_day.iter().map(Vec::len).max().unwrap_or(0);
         let rows = (ev_rows + due_rows).max(1) as f32;
-        let head_h = 44.0 + rows * 22.0 + 6.0;
+        // laid out anew (other days, other widths): everything is just there
+        let geom = (days[0], n, col_w.round() as i32);
+        let snap = self.due_chips.geom != Some(geom);
+        self.due_chips.geom = Some(geom);
+        let settle = if snap { 0.0 } else { motion::NORMAL.secs() };
+        // the rows grow and shrink smoothly as deadlines come and go
+        let head_h = ctx.animate_value_with_time(ids::due_head(), 44.0 + rows * 22.0 + 6.0, settle);
         let (hrect, hresp) = ui.allocate_exact_size(vec2(full_w, head_h), Sense::click_and_drag());
+        self.due_chips.head = Some(hrect);
         let hp = ui.painter_at(hrect);
-        let x0 = hrect.left() + GUTTER_W;
         hp.text(pos2(x0 - 8.0, hrect.top() + 50.0), Align2::RIGHT_TOP, "all-day", FontId::proportional(theme::size::MINI), self.pal.muted);
         hp.text(
             pos2(x0 - 8.0, hrect.top() + 22.0),
@@ -391,40 +566,31 @@ impl App {
                 chips.push((e.id, r));
             }
         }
-        let mut due_chips: Vec<(u64, Rect)> = vec![];
-        for (i, list) in due_by_day.iter().enumerate() {
-            for (k, (tid, title)) in list.iter().enumerate() {
-                let y = hrect.top() + 47.0 + (ev_rows + k) as f32 * 22.0;
-                let r = Rect::from_min_max(pos2(x0 + i as f32 * col_w + 2.0, y), pos2(x0 + (i + 1) as f32 * col_w - 4.0, y + 20.0));
-                let over = hresp.hover_pos().map(|p| r.contains(p)).unwrap_or(false);
-                let glow = ui.ctx().animate_bool_with_time(ids::due_glow(*tid), over, motion::HOVER.secs());
-                hp.rect_filled(r, 4.0, mix(self.pal.bg, self.pal.text, 0.03 + 0.07 * glow));
-                hp.rect_stroke(r, 4.0, Stroke::new(1.0, mix(self.pal.border, self.pal.text, 0.25)), StrokeKind::Inside);
-                let c = hp.with_clip_rect(r.shrink(2.0));
-                c.text(r.left_center() + vec2(5.0, 0.0), Align2::LEFT_CENTER, icons::FLAG, FontId::proportional(theme::size::SMALL), self.pal.text);
-                c.text(r.left_center() + vec2(22.0, 0.0), Align2::LEFT_CENTER, title, theme::bold(theme::size::SMALL), self.pal.text);
-                due_chips.push((*tid, r));
-            }
-        }
-        // a deadline is dragged like a task from the list: onto another day's
-        // all-day row it moves the due date, into the hours it plans a session
+        let due_chips = self.paint_deadlines(&ctx, &hp, &hresp, &due_by_day, slot.map(|s| s.1), (x0, top, rows_top, col_w), snap, now_s);
+        // a deadline is dragged like a task from the list: onto the all-day
+        // rows it moves to that day and place, into the hours it plans a
+        // session once that is confirmed
         if hresp.drag_started() {
-            let from = ui.ctx().input(|i| i.pointer.press_origin());
+            let from = ctx.input(|i| i.pointer.press_origin());
             if let Some((tid, _)) = from.and_then(|q| due_chips.iter().find(|(_, r)| r.contains(q))) {
                 self.drag_task = Some(*tid);
+                self.drag_due = Some(*tid);
             }
         }
         if self.drag_task.is_none() && hresp.hover_pos().is_some_and(|q| due_chips.iter().any(|(_, r)| r.contains(q))) {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            ctx.set_cursor_icon(egui::CursorIcon::Grab);
         }
-        if let Some(tid) = self.drag_task {
-            let pos = ui.ctx().input(|i| i.pointer.latest_pos());
-            if let Some(q) = pos.filter(|q| !self.over_flyer(*q) && hrect.contains(*q) && q.x >= x0 && q.y > hrect.top() + 44.0) {
+        if let (Some((di, tid)), true) = (slot, ctx.input(|i| i.pointer.any_released())) {
+            self.drop_deadline(&ctx, tid, days[di], &due_by_day[di]);
+            self.drag_task = None;
+            self.drag_due = None;
+        } else if let (Some(tid), false) = (self.drag_task, on) {
+            // with deadlines kept off the calendar, a day column still takes one
+            if let Some(q) = ctx.input(|i| i.pointer.latest_pos()).filter(|q| !self.over_flyer(*q) && hrect.contains(*q) && q.x >= x0 && q.y > hrect.top() + 44.0) {
                 let di = (((q.x - x0) / col_w) as usize).min(n - 1);
                 let col = Rect::from_min_max(pos2(x0 + di as f32 * col_w, hrect.top() + 44.0), pos2(x0 + (di + 1) as f32 * col_w, hrect.bottom()));
                 hp.rect_stroke(col.shrink(1.0), 4.0, Stroke::new(2.0, self.pal.accent), StrokeKind::Inside);
-                if ui.ctx().input(|i| i.pointer.any_released()) {
-                    let ctx = ui.ctx().clone();
+                if ctx.input(|i| i.pointer.any_released()) {
                     self.set_due(&ctx, tid, days[di]);
                     self.drag_task = None;
                 }
@@ -1076,10 +1242,35 @@ impl App {
                     if ctx.input(|i| i.pointer.any_released()) {
                         match kept_out {
                             Some(name) => self.warn(&ctx, trf("\"{}\" keeps other tasks out", &[&name])),
+                            // a deadline pulled down asks first: the
+                            // session would sit beside a deadline that stays
+                            None if self.drag_due == Some(tid) => self.due_plan = Some(DuePlan { task: tid, start, at: r }),
                             None => self.schedule_task(&ctx, tid, start),
                         }
                         self.drag_task = None;
+                        self.drag_due = None;
                     }
+                }
+            }
+        }
+        // a deadline let go in the hours waits there for an answer
+        if let Some(plan) = &self.due_plan {
+            let start = plan.start;
+            if let Some(di) = days.iter().position(|d| *d == start.date()) {
+                let mins = self.data.task(plan.task).and_then(|t| t.duration_min).unwrap_or(p.default_task_min);
+                let s = (start - midnight(start.date())).num_minutes();
+                let r = Rect::from_min_max(pos2(x0 + di as f32 * col_w, y_of(s)), pos2(x0 + (di + 1) as f32 * col_w - 8.0, y_of(s + mins)));
+                let bg = self.pal.bg;
+                let own = rgb(self.data.block_color(self.data.task(plan.task), self.data.default_calendar()));
+                fill_squircle(&painter, r, theme::RADIUS, mix(bg, own, 0.25));
+                stroke_squircle(&painter, r.shrink(0.5), theme::RADIUS, Stroke::new(1.5, own));
+                painter.text(r.left_top() + vec2(8.0, 4.0), Align2::LEFT_TOP, p.fmt_time(start.time()), FontId::proportional(theme::size::MICRO), self.pal.text);
+                if let Some(t) = self.data.task(plan.task) {
+                    let c = painter.with_clip_rect(r.shrink(2.0).intersect(painter.clip_rect()));
+                    c.text(r.left_top() + vec2(8.0, 18.0), Align2::LEFT_TOP, &t.title, theme::bold(theme::size::SMALL), self.pal.text);
+                }
+                if let Some(plan) = self.due_plan.as_mut() {
+                    plan.at = r;
                 }
             }
         }
