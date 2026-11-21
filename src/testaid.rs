@@ -82,6 +82,8 @@ pub struct Aids {
     pub morph: Option<f32>,
     /// `KATLENDAR_UPDATE=<version>`: the notice that that version is out *(picture)*
     pub update: Option<String>,
+    /// `KATLENDAR_GEO=<lat>,<lon>`: every sample place with a text is at that spot *(picture)*
+    pub geo: Option<(f64, f64)>,
     /// `KATLENDAR_REPEAT=<field>`: that repeat field (crep, erep, rep)
     /// repeats every 2 weeks on Mo and We, 10 times
     pub repeat: Option<String>,
@@ -129,6 +131,7 @@ fn read(var: impl Fn(&str) -> Option<String>) -> Aids {
         new_list: on("NEW_LIST"),
         update: set("UPDATE"),
         repeat: set("REPEAT"),
+        geo: set("GEO").and_then(|v| crate::model::parse_geo_uri(&format!("geo:{v}"))),
         morph: set("MORPH").and_then(|v| v.trim().parse::<f32>().ok()).map(|t| t.clamp(0.0, 1.0)),
         drag: set("DRAG").and_then(|v| {
             let (title, at) = v.rsplit_once('@')?;
@@ -161,7 +164,9 @@ mod tests {
             ("KATLENDAR_SHOW_CREATE", "frame"),
             ("KATLENDAR_CREATE_AT", "23"),
             ("KATLENDAR_NOW", "2026-11-11T10:30"),
+            ("KATLENDAR_GEO", "51.5, -0.12"),
         ]);
+        assert_eq!(a.geo, Some((51.5, -0.12)));
         assert_eq!(a.window, Some(egui::vec2(760.0, 480.0)));
         assert_eq!(a.drag, Some(("Write a".into(), egui::pos2(12.0, 34.0))));
         assert_eq!(a.show_create, Some(Create::Frame));

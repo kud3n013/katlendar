@@ -501,6 +501,17 @@ fn place_field(ui: &mut egui::Ui, place: &mut Option<Place>, open: OpenIn) {
     });
 }
 
+/// The map under a place whose spot is known, which can be dragged and
+/// zoomed. It starts on the spot, and goes back there when the spot changes.
+fn place_map(ui: &mut egui::Ui, salt: &str, spot: (f64, f64)) {
+    let id = crate::ids::place_map(salt);
+    let kept = ui.data(|d| d.get_temp::<(crate::maps::MapView, (f64, f64))>(id));
+    let mut view = kept.filter(|k| k.1 == spot).map(|k| k.0).unwrap_or(crate::maps::MapView { center: spot, zoom: 16.0 });
+    let size = egui::vec2(ui.available_width().max(160.0), 160.0);
+    crate::maps::show(ui, &mut view, Some(spot), size);
+    ui.data_mut(|d| d.insert_temp(id, (view, spot)));
+}
+
 /// Opens a place's link in the browser or map app: a pin alone, or a
 /// pin and "Open in …" for a window where the place can't be edited.
 fn open_place_button(ui: &mut egui::Ui, url: &str, open: OpenIn, words: bool) {
@@ -1580,6 +1591,11 @@ impl App {
                     editor_label(ui, tr("Location"), muted);
                     place_field(ui, &mut ed.ev.place, open);
                     ui.end_row();
+                    if let Some(spot) = ed.ev.place.as_ref().and_then(|p| p.geo).filter(|_| locked.is_none()) {
+                        ui.label("");
+                        place_map(ui, "event", spot);
+                        ui.end_row();
+                    }
                     let day = ed.ev.start.date();
                     let label = |ui: &mut egui::Ui, t: &str| editor_label(ui, t, muted);
                     let tip = tr("Saving adds a copy of this event each time, up to the last one");
@@ -1599,6 +1615,10 @@ impl App {
             if let Some(url) = ed.ev.place.as_ref().and_then(|p| open.link(p)) {
                 ui.add_space(4.0);
                 open_place_button(ui, &url, open, true);
+            }
+            if let Some(spot) = ed.ev.place.as_ref().and_then(|p| p.geo) {
+                ui.add_space(4.0);
+                place_map(ui, "event", spot);
             }
         }
         if !is_task && !ed.ev.all_day {
@@ -1861,6 +1881,11 @@ impl App {
             editor_label(ui, tr("Location"), muted);
             place_field(ui, &mut ed.task.place, self.data.prefs.open_places_in);
             ui.end_row();
+            if let Some(spot) = ed.task.place.as_ref().and_then(|p| p.geo) {
+                ui.label("");
+                place_map(ui, "task", spot);
+                ui.end_row();
+            }
             let day = ed.task.due.unwrap_or_else(|| chrono::Local::now().date_naive());
             let label = |ui: &mut egui::Ui, t: &str| editor_label(ui, t, muted);
             let tip = tr("Ticking the task off leaves a fresh one, due the next time");
