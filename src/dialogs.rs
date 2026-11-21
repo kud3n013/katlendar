@@ -497,19 +497,34 @@ fn place_field(ui: &mut egui::Ui, salt: &str, place: &mut Option<Place>, open: O
         // a window that can't be changed has its own, enabled one
         let link = place.as_ref().filter(|_| ui.is_enabled()).and_then(|p| open.link(p));
         let find = ui.is_enabled();
-        // the buttons' own widths, so the field leaves them just enough room
+        // the room the buttons took last time, so the field leaves them
+        // just that: a button is drawn at least as wide as it is high, so
+        // its icon alone doesn't tell
         let gap = ui.spacing().item_spacing.x;
-        let buttons = if find { icon_button_w(ui, icons::MAP_PIN) + gap } else { 0.0 } + if link.is_some() { icon_button_w(ui, icons::EXTERNAL_LINK) + gap } else { 0.0 };
+        let room_id = ui.scope_id().with(("place buttons", salt, find, link.is_some()));
+        let guess = if find { icon_button_w(ui, icons::MAP_PIN) + gap } else { 0.0 } + if link.is_some() { icon_button_w(ui, icons::EXTERNAL_LINK) + gap } else { 0.0 };
+        let buttons = ui.data(|d| d.get_temp::<f32>(room_id)).unwrap_or(guess);
         let mut text = place_text(place).to_string();
         let w = (ui.available_width() - buttons).max(80.0);
-        if ui.add(egui::TextEdit::singleline(&mut text).hint_text(tr("Add a place")).desired_width(w)).changed() {
+        let field = ui.add(egui::TextEdit::singleline(&mut text).hint_text(tr("Add a place")).desired_width(w));
+        if field.changed() {
             set_place_text(place, &text);
         }
-        if find && ui.button(icons::MAP_PIN).on_hover_text(tr("Find on the map")).clicked() {
-            crate::maps::picker::open(ui.ctx(), picker, place, provider);
+        let mut right = field.rect.right();
+        if find {
+            let b = ui.button(icons::MAP_PIN).on_hover_text(tr("Find on the map"));
+            right = b.rect.right();
+            if b.clicked() {
+                crate::maps::picker::open(ui.ctx(), picker, place, provider);
+            }
         }
         if let Some(url) = link {
-            open_place_button(ui, &url, open, false);
+            right = open_place_button(ui, &url, open, false).right();
+        }
+        let took = right - field.rect.right();
+        if (took - buttons).abs() > 0.5 {
+            ui.data_mut(|d| d.insert_temp(room_id, took));
+            ui.ctx().request_discard("the place buttons took other room");
         }
     });
     match crate::maps::picker::show(ui.ctx(), picker) {
@@ -547,13 +562,14 @@ fn place_map(ui: &mut egui::Ui, salt: &str, spot: (f64, f64), provider: MapProvi
 
 /// Opens a place's link in the browser or map app: a pin alone, or a
 /// pin and "Open in …" for a window where the place can't be edited.
-fn open_place_button(ui: &mut egui::Ui, url: &str, open: OpenIn, words: bool) {
+fn open_place_button(ui: &mut egui::Ui, url: &str, open: OpenIn, words: bool) -> egui::Rect {
     let what = trf("Open in {}", &[&open.name()]);
     let label = if words { format!("{}  {what}", icons::MAP_PIN) } else { icons::EXTERNAL_LINK.to_string() };
     let b = ui.button(label).on_hover_text(if words { url.to_string() } else { what });
     if b.clicked() {
         crate::platform::open_url(url);
     }
+    b.rect
 }
 
 /// Starts the part of a window that changes with what is being made. It
