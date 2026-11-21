@@ -6,6 +6,7 @@
 mod ics;
 mod icons;
 mod ids;
+mod maps;
 mod model;
 mod testaid;
 mod theme;

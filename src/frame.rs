@@ -11,6 +11,11 @@ impl App {
         let Some(path) = self.shot.clone() else { return };
         self.frames += 1;
         ctx.request_repaint();
+        // a map in the picture waits for its tiles, for at most about ten seconds
+        static WAITED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if self.frames == 120 && crate::maps::busy() && WAITED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 600 {
+            self.frames -= 1;
+        }
         // for screenshots: step this many periods just before the picture,
         // to catch the slide half way
         if self.frames == 104 {

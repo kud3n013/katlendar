@@ -375,6 +375,12 @@ impl App {
         let today = Local::now().date_naive();
         let data = if shot.is_some() { Data::sample(today) } else { Data::load_or_sample(today) };
         let mut data = data;
+        // for screenshots of a map: the sample places at a spot
+        if let Some(geo) = testaid::get().geo.filter(|_| shot.is_some()) {
+            for p in data.events.iter_mut().filter_map(|e| e.place.as_mut()) {
+                p.geo = Some(geo);
+            }
+        }
         // for screenshots of the settings: a signed-in account to look at
         if shot.is_some() && testaid::get().demo_account {
             data.accounts.push(Account {

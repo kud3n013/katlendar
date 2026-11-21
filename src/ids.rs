@@ -94,6 +94,8 @@ fixed! {
 }
 
 keyed! {
+    /// where the map of an editor's place was left: "event" or "task"
+    place_map = "placemap";
     /// a day in the quick-nav strip
     quick_nav_day = "qnd";
     /// a section heading of the task panel
