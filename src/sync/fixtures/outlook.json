@@ -1,0 +1,119 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#Collection(event)",
+  "value": [
+    {
+      "@odata.etag": "W/\"DwAAABYAAAB3pY6rC1XkSaQ3d5H0p8mEAAAFq2Hc\"",
+      "id": "AAMkAGVmMDEzMTM4LTZmYWUtNDdkNC1hMDZiLTU1OGY5OTZhYmY4OABGAAAAAAAiQ8W967B7TKBjgx9rVEURBwAiIsqMbYjsT5e-T7KzowPTAAAAAAENAAAiIsqMbYjsT5e-T7KzowPTAAAa_WKzAAA=",
+      "createdDateTime": "2026-11-18T09:12:44.1234567Z",
+      "lastModifiedDateTime": "2026-11-18T09:14:02.7654321Z",
+      "subject": "Coffee with Alex",
+      "isAllDay": false,
+      "isCancelled": false,
+      "type": "singleInstance",
+      "seriesMasterId": null,
+      "showAs": "busy",
+      "body": { "contentType": "html", "content": "" },
+      "start": { "dateTime": "2026-11-24T08:30:00.0000000", "timeZone": "UTC" },
+      "end": { "dateTime": "2026-11-24T09:15:00.0000000", "timeZone": "UTC" },
+      "location": {
+        "displayName": "Monmouth Coffee Company",
+        "locationType": "localBusiness",
+        "uniqueId": "8b1a6c2e-5f3d-4b9a-9e7c-1d2f3a4b5c6d",
+        "uniqueIdType": "bing",
+        "address": { "street": "27 Monmouth St", "city": "London", "state": "England", "countryOrRegion": "United Kingdom", "postalCode": "WC2H 9EU" },
+        "coordinates": { "latitude": 51.51417, "longitude": -0.12694 }
+      },
+      "locations": [
+        {
+          "displayName": "Monmouth Coffee Company",
+          "locationType": "localBusiness",
+          "uniqueId": "8b1a6c2e-5f3d-4b9a-9e7c-1d2f3a4b5c6d",
+          "uniqueIdType": "bing",
+          "address": { "street": "27 Monmouth St", "city": "London", "state": "England", "countryOrRegion": "United Kingdom", "postalCode": "WC2H 9EU" },
+          "coordinates": { "latitude": 51.51417, "longitude": -0.12694 }
+        }
+      ]
+    },
+    {
+      "@odata.etag": "W/\"DwAAABYAAAB3pY6rC1XkSaQ3d5H0p8mEAAAFq2Hd\"",
+      "id": "AAMkAGVmMDEzMTM4LTZmYWUtNDdkNC1hMDZiLTU1OGY5OTZhYmY4OABGAAAAAAAiQ8W967B7TKBjgx9rVEURBwAiIsqMbYjsT5e-T7KzowPTAAAAAAENAAAiIsqMbYjsT5e-T7KzowPTAAAa_WK0AAA=",
+      "subject": "Weekly sync",
+      "isAllDay": false,
+      "isCancelled": false,
+      "type": "singleInstance",
+      "isOnlineMeeting": true,
+      "onlineMeetingProvider": "teamsForBusiness",
+      "body": { "contentType": "html", "content": "<html><body><p>Join on your computer or mobile app</p></body></html>" },
+      "start": { "dateTime": "2026-11-24T14:00:00.0000000", "timeZone": "UTC" },
+      "end": { "dateTime": "2026-11-24T14:30:00.0000000", "timeZone": "UTC" },
+      "location": {
+        "displayName": "Microsoft Teams Meeting",
+        "locationType": "default",
+        "uniqueId": "Microsoft Teams Meeting",
+        "uniqueIdType": "private"
+      },
+      "locations": [
+        { "displayName": "Microsoft Teams Meeting", "locationType": "default", "uniqueId": "Microsoft Teams Meeting", "uniqueIdType": "private" }
+      ]
+    },
+    {
+      "@odata.etag": "W/\"DwAAABYAAAB3pY6rC1XkSaQ3d5H0p8mEAAAFq2He\"",
+      "id": "AAMkAGVmMDEzMTM4LTZmYWUtNDdkNC1hMDZiLTU1OGY5OTZhYmY4OABGAAAAAAAiQ8W967B7TKBjgx9rVEURBwAiIsqMbYjsT5e-T7KzowPTAAAAAAENAAAiIsqMbYjsT5e-T7KzowPTAAAa_WK1AAA=",
+      "subject": "Focus time",
+      "isAllDay": false,
+      "isCancelled": false,
+      "type": "singleInstance",
+      "body": { "contentType": "html", "content": "" },
+      "start": { "dateTime": "2026-11-25T09:00:00.0000000", "timeZone": "UTC" },
+      "end": { "dateTime": "2026-11-25T11:00:00.0000000", "timeZone": "UTC" },
+      "location": {
+        "displayName": "",
+        "locationType": "default",
+        "uniqueIdType": "unknown",
+        "address": {},
+        "coordinates": {}
+      },
+      "locations": []
+    },
+    {
+      "@odata.etag": "W/\"DwAAABYAAAB3pY6rC1XkSaQ3d5H0p8mEAAAFq2Hf\"",
+      "id": "AAMkAGVmMDEzMTM4LTZmYWUtNDdkNC1hMDZiLTU1OGY5OTZhYmY4OABGAAAAAAAiQ8W967B7TKBjgx9rVEURBwAiIsqMbYjsT5e-T7KzowPTAAAAAAENAAAiIsqMbYjsT5e-T7KzowPTAAAa_WK2AAA=",
+      "subject": "Quarterly planning",
+      "isAllDay": false,
+      "isCancelled": false,
+      "type": "singleInstance",
+      "body": { "contentType": "html", "content": "" },
+      "start": { "dateTime": "2026-11-26T13:00:00.0000000", "timeZone": "UTC" },
+      "end": { "dateTime": "2026-11-26T15:00:00.0000000", "timeZone": "UTC" },
+      "location": {
+        "displayName": "Conf Room Adams",
+        "locationType": "conferenceRoom",
+        "locationEmailAddress": "adams@contoso.example",
+        "uniqueId": "adams@contoso.example",
+        "uniqueIdType": "directory",
+        "address": {},
+        "coordinates": {}
+      },
+      "locations": [
+        { "displayName": "Conf Room Adams", "locationType": "conferenceRoom", "locationEmailAddress": "adams@contoso.example", "uniqueId": "adams@contoso.example", "uniqueIdType": "directory" }
+      ]
+    },
+    {
+      "@odata.etag": "W/\"DwAAABYAAAB3pY6rC1XkSaQ3d5H0p8mEAAAFq2Hg\"",
+      "id": "AAMkAGVmMDEzMTM4LTZmYWUtNDdkNC1hMDZiLTU1OGY5OTZhYmY4OABGAAAAAAAiQ8W967B7TKBjgx9rVEURBwAiIsqMbYjsT5e-T7KzowPTAAAAAAENAAAiIsqMbYjsT5e-T7KzowPTAAAa_WK3AAA=",
+      "subject": "Pick up the bike",
+      "isAllDay": false,
+      "isCancelled": false,
+      "type": "singleInstance",
+      "body": { "contentType": "text", "content": "" },
+      "start": { "dateTime": "2026-11-27T16:00:00.0000000", "timeZone": "UTC" },
+      "end": { "dateTime": "2026-11-27T16:30:00.0000000", "timeZone": "UTC" },
+      "location": {
+        "displayName": "",
+        "locationType": "streetAddress",
+        "uniqueIdType": "unknown",
+        "address": { "street": "Lindengracht 105", "city": "Amsterdam", "state": "", "countryOrRegion": "Netherlands", "postalCode": "1015 KD" }
+      }
+    }
+  ]
+}

@@ -295,6 +295,17 @@ Each phase leaves the app working and can ship alone.
      Apple Calendar through iCloud or Nextcloud, and Proton.
    - Make events in each of those and check that they come back here with coordinates where the
      format allows.
+   - **As built in phase 7:**
+     - Example events, modelled on what each service sends, are in `src/sync/fixtures/`:
+       Google over CalDAV, iCloud from an iPhone, Nextcloud web, Thunderbird, five Outlook places
+       (Bing, Teams, none, a meeting room, an address only) and Proton's three decrypted parts.
+     - Tests read them and write them back: other apps' lines, reminders and Apple's map handle
+       stay; an added spot reads back; Proton keeps the place and spot in the encrypted part.
+     - They found one bug: Apple's `X-TITLE` holds only the place's name (the first line of
+       `LOCATION`), so an unchanged iPhone place looked changed and lost its map handle. Fixed;
+       Apple's line is now also written with the first line only.
+     - The live checks need real accounts and are not done yet. The checklist is
+       `docs/map-checks.md`.
 
 ## 7. Open questions
 

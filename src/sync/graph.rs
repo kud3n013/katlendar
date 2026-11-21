@@ -391,6 +391,30 @@ mod tests {
         assert!(same_place(&json!({"displayName":""}), &Event::default()));
     }
 
+    /// Events as Outlook sends them: a place found on Bing, a Teams call,
+    /// no place, a meeting room and an address with no name.
+    #[test]
+    fn places_from_outlook() {
+        let v: Value = serde_json::from_str(include_str!("fixtures/outlook.json")).unwrap();
+        let events: Vec<&Value> = v["value"].as_array().unwrap().iter().collect();
+        let places: Vec<Option<Place>> = events.iter().map(|e| event_of(e).unwrap().place).collect();
+        assert_eq!(places[0], Place::of("Monmouth Coffee Company", Some((51.51417, -0.12694))));
+        assert_eq!(places[1], Place::named("Microsoft Teams Meeting"));
+        assert_eq!(places[2], None);
+        assert_eq!(places[3], Place::named("Conf Room Adams"));
+        assert_eq!(places[4], Place::named("Lindengracht 105, Amsterdam, 1015 KD, Netherlands"));
+
+        // what is read is what the server has: nothing to send back
+        for (e, place) in events.iter().zip(&places) {
+            assert!(same_place(&e["location"], &Event { place: place.clone(), ..Default::default() }), "{}", e["subject"]);
+        }
+        // a spot added to the room is sent, without Bing's address
+        let moved = Event { place: Place::of("Conf Room Adams", Some((47.64, -122.13))), ..Default::default() };
+        assert!(!same_place(&events[3]["location"], &moved));
+        let j = location_json(&moved.place);
+        assert_eq!(j, json!({"displayName": "Conf Room Adams", "coordinates": {"latitude": 47.64, "longitude": -122.13}}));
+    }
+
     #[test]
     fn lists_and_pulls() {
         let ev = |id: &str, title: &str| format!(r#"{{"id":"{id}","subject":"{title}","isAllDay":false,"start":{{"dateTime":"2026-11-16T15:00:00.0000000","timeZone":"UTC"}},"end":{{"dateTime":"2026-11-16T16:00:00.0000000","timeZone":"UTC"}}}}"#);
