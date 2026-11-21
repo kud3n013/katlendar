@@ -669,8 +669,8 @@ impl Provider for Proton {
         }
         let made = (|| {
             let (keys, addresses) = self.writer(&cal.id)?;
-            let (place, text) = super::place_and_notes(&e.notes);
-            let fields = ics::EventFields { summary: e.title.clone(), start: e.start, end: e.end, all_day: e.all_day, description: text, location: place, ..Default::default() };
+            let (location, geo) = (crate::model::place_text(&e.place).trim().to_string(), e.place.as_ref().and_then(|p| p.geo));
+            let fields = ics::EventFields { summary: e.title.clone(), start: e.start, end: e.end, all_day: e.all_day, description: e.notes.clone(), location, geo, ..Default::default() };
             let uid = super::new_uid();
             let lines = event_lines(&ics::write_event(None, &uid, &fields, chrono::Utc::now().naive_utc()));
             let (mut event, packet) = Self::content(&keys, &addresses[keys.address].keys[0], &lines, None)?;
@@ -1054,7 +1054,7 @@ mod tests {
         let at = |h: u32| NaiveDate::from_ymd_opt(2026, 11, 17).unwrap().and_hms_opt(h, 0, 0).unwrap();
 
         // a new event: signed, encrypted, and back with its real address
-        let new = Event { id: 5, title: "Lunch, with Ana".into(), start: at(12), end: at(13), notes: "Where: Corner café\nBring the long list of things that we said we would talk about last time".into(), ..Default::default() };
+        let new = Event { id: 5, title: "Lunch, with Ana".into(), start: at(12), end: at(13), notes: "Bring the long list of things that we said we would talk about last time".into(), place: crate::model::Place::of("Corner café", Some((48.8566, 2.3522))), ..Default::default() };
         let res = super::super::push(&mut p, &cal, &[super::super::PushJob::Save(new.clone())], now());
         let PushResult::Saved { href, etag, uid, .. } = &res[0] else { panic!("{:?}", res[0]) };
         assert!(href.starts_with("cal1/new") && etag.is_some() && uid.ends_with("-katlendar"));
@@ -1062,7 +1062,7 @@ mod tests {
         assert!(d.full);
         let lunch = d.upserts.iter().find(|e| e.title == "Lunch, with Ana").unwrap();
         assert_eq!((lunch.start, lunch.end, lunch.href.as_ref(), lunch.etag.as_ref()), (at(12), at(13), Some(href), etag.as_ref()));
-        assert_eq!(lunch.notes, new.notes);
+        assert_eq!((&lunch.notes, &lunch.place), (&new.notes, &new.place));
 
         // a change keeps the event's key and address
         let moved = Event { title: "Late lunch".into(), start: at(14), end: at(15), notes: String::new(), href: Some(href.clone()), etag: etag.clone(), uid: Some(uid.clone()), ..new.clone() };

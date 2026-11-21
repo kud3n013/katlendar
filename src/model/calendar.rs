@@ -1,6 +1,6 @@
 //! Calendars, the accounts they come from, and their events.
 
-use super::EventBuffer;
+use super::{EventBuffer, Place};
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
@@ -140,6 +140,9 @@ pub struct Event {
     /// id of its calendar
     pub calendar: u64,
     pub notes: String,
+    /// where it happens; sent to the server with the event
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<Place>,
     pub task_id: Option<u64>,
     /// own colour, chosen from the right-click menu
     #[serde(default)]
@@ -189,6 +192,7 @@ impl Event {
         self.all_day = n.all_day;
         self.calendar = n.calendar;
         self.notes = n.notes;
+        self.place = n.place;
         self.side_notes = n.side_notes;
         self.buffer = n.buffer;
     }
@@ -201,7 +205,7 @@ impl Event {
     }
     /// The parts a server keeps are the same in both.
     pub fn same_content(&self, o: &Event) -> bool {
-        self.title == o.title && self.start == o.start && self.end == o.end && self.all_day == o.all_day && self.notes == o.notes
+        self.title == o.title && self.start == o.start && self.end == o.end && self.all_day == o.all_day && self.notes == o.notes && self.place == o.place
     }
     pub fn minutes(&self) -> i64 {
         (self.end - self.start).num_minutes()

@@ -9,6 +9,9 @@ pub struct Task {
     pub id: u64,
     pub title: String,
     pub notes: String,
+    /// where it is done; its blocks show it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<Place>,
     pub due: Option<NaiveDate>,
     /// 0 none, 1-3 high, 4-5 medium, 6-9 low
     pub priority: u8,
@@ -145,6 +148,7 @@ impl Task {
     pub fn take_edits(&mut self, n: Task) {
         self.title = n.title;
         self.notes = n.notes;
+        self.place = n.place;
         self.due = n.due;
         self.priority = n.priority;
         self.duration_min = n.duration_min;
@@ -163,6 +167,6 @@ impl Task {
     }
     /// The parts a server keeps are the same in both.
     pub fn same_content(&self, o: &Task) -> bool {
-        self.title == o.title && self.notes == o.notes && self.due == o.due && self.priority == o.priority && self.done == o.done && self.tags == o.tags && self.duration_min == o.duration_min
+        self.title == o.title && self.notes == o.notes && self.place == o.place && self.due == o.due && self.priority == o.priority && self.done == o.done && self.tags == o.tags && self.duration_min == o.duration_min
     }
 }

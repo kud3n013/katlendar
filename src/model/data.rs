@@ -166,6 +166,7 @@ impl Data {
     pub fn from_json(text: &str) -> Option<Data> {
         let mut d: Data = serde_json::from_str(text).ok()?;
         d.migrate();
+        d.migrate_places();
         d.fold_block_notes();
         Some(d)
     }
@@ -192,15 +193,34 @@ impl Data {
             self.sync_blocks(id);
         }
     }
-    /// Gives every block of a task the task's name and note.
+    /// Gives every block of a task the task's name, note and place.
     pub fn sync_blocks(&mut self, task: u64) {
-        let Some((title, notes)) = self.task(task).map(|t| (t.title.clone(), t.notes.clone())) else { return };
+        let Some((title, notes, place)) = self.task(task).map(|t| (t.title.clone(), t.notes.clone(), t.place.clone())) else { return };
         for e in self.events.iter_mut().filter(|e| e.task_id == Some(task)) {
             if e.title != title {
                 e.title = title.clone();
             }
             if e.notes != notes {
                 e.notes = notes.clone();
+            }
+            if e.place != place {
+                e.place = place.clone();
+            }
+        }
+    }
+    /// Older data files kept the place as a first line "Where: …" in the
+    /// notes. Moves it to the place of its own.
+    pub fn migrate_places(&mut self) {
+        for e in self.events.iter_mut().filter(|e| e.place.is_none()) {
+            let (place, notes) = split_where(&e.notes);
+            if place.is_some() {
+                (e.place, e.notes) = (place, notes);
+            }
+        }
+        for t in self.tasks.iter_mut().filter(|t| t.place.is_none()) {
+            let (place, notes) = split_where(&t.notes);
+            if place.is_some() {
+                (t.place, t.notes) = (place, notes);
             }
         }
     }
@@ -319,18 +339,20 @@ impl Data {
             e.end = f.end;
             e.all_day = f.all_day;
             e.notes = f.notes;
+            e.place = f.place;
             e.uid = Some(f.uid);
             e.recurrence_id = f.recurrence_id;
             e.href = f.href;
             e.etag = f.etag;
-            // a block's name and note are its task's
+            // a block's name, note and place are its task's
             if let Some(tid) = e.task_id {
-                let (title, notes) = (e.title.clone(), e.notes.clone());
+                let (title, notes, place) = (e.title.clone(), e.notes.clone(), e.place.clone());
                 if let Some(t) = self.task_mut(tid) {
                     if !title.trim().is_empty() {
                         t.title = title;
                     }
                     t.notes = notes;
+                    t.place = place;
                 }
                 self.sync_blocks(tid);
             }
@@ -393,6 +415,9 @@ impl Data {
             }
             t.title = f.title;
             t.notes = f.notes;
+            if let Some(place) = f.place {
+                t.place = place;
+            }
             t.due = f.due;
             t.priority = f.priority;
             t.done = f.done;

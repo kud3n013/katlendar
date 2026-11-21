@@ -225,6 +225,7 @@ impl Data {
                 id,
                 title: t.title.clone(),
                 notes: t.notes.clone(),
+                place: t.place.clone(),
                 start: s,
                 end: e,
                 calendar: cal,

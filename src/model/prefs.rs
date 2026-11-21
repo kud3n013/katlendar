@@ -155,6 +155,8 @@ pub struct Prefs {
     pub quick: QuickSyntax,
     /// ask GitHub now and then whether a newer version is out
     pub check_updates: bool,
+    /// the map a place's "Open in" button shows it on
+    pub open_places_in: OpenIn,
 }
 
 impl Default for Prefs {
@@ -211,6 +213,7 @@ impl Default for Prefs {
             keybinds: Default::default(),
             quick: QuickSyntax::default(),
             check_updates: true,
+            open_places_in: OpenIn::default(),
         }
     }
 }

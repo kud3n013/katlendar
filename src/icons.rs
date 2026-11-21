@@ -47,6 +47,9 @@ pub const PEN: &str = "\u{e172}"; // square-pen
 pub const BAN: &str = "\u{e051}"; // ban
 pub const ALERT: &str = "\u{e193}"; // triangle-alert
 pub const DOWNLOAD: &str = "\u{e0b2}"; // download
+pub const MAP: &str = "\u{e110}"; // map
+pub const MAP_PIN: &str = "\u{e111}"; // map-pin
+pub const EXTERNAL_LINK: &str = "\u{e0b9}"; // external-link
 
 /// What a task list can show in place of its ring.
 pub const LIST_ICONS: [&str; 19] = [

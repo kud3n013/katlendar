@@ -59,6 +59,10 @@ impl Data {
         ev(&mut d, "Weekly wrap-up", 5, 11, 0, 60, 1);
         ev(&mut d, "Dinner with friends", 5, 9, 0, 30, 2);
         ev(&mut d, "Farmers market", 6, 9, 0, 90, 2);
+        // a place to open on the map
+        if let Some(e) = d.events.iter_mut().find(|e| e.title == "Dentist") {
+            e.place = Place::named("Smile Dental, 12 High Street");
+        }
         let id = d.new_id();
         d.events.push(Event {
             id,
