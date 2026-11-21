@@ -73,6 +73,9 @@ pub fn open_account(a: &Account, secret: &str, tokens: &TokenCache, allow_file: 
         };
         return Ok(Box::new(sync::proton::Proton::new(&uid, &access, &refresh, &key_pass, Some(Box::new(renewed)))));
     }
+    if a.todoist {
+        return Ok(Box::new(sync::todoist::Todoist::new(secret)));
+    }
     if !a.google && !a.microsoft {
         return Ok(Box::new(CalDav::new(&a.server, &a.username, secret, a.home.clone())));
     }
@@ -105,6 +108,7 @@ pub fn open_account(a: &Account, secret: &str, tokens: &TokenCache, allow_file: 
 /// Why an account's sync failed, in words that say what to do.
 pub fn account_error(a: Option<&Account>, e: &sync::SyncError) -> String {
     match (a, e) {
+        (Some(a), sync::SyncError::Auth) if a.todoist => "Todoist refused the API token; it may have been reset. Sign out of this account here, then connect again with the new token.".into(),
         (Some(a), sync::SyncError::Auth) if a.proton => "Proton wants you to sign in again (the session ended or the password changed): sign out of this account here, then sign in once more.".into(),
         (Some(a), sync::SyncError::Auth) if a.microsoft => "Microsoft wants you to sign in again: sign out of this account here, then sign in once more.".into(),
         (Some(a), sync::SyncError::Auth) if a.google => "Google wants you to sign in again: sign out of this account here, then sign in once more. While a Google Cloud project is in Testing, a sign-in lasts 7 days.".into(),

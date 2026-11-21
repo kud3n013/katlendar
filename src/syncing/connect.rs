@@ -76,6 +76,28 @@ impl App {
         self.sync_account(ctx, id, Some(pass));
     }
 
+    /// Connects Todoist with the API token pasted in preferences. The
+    /// token leaves the form at once, and is kept in the keyring only once
+    /// Todoist took it.
+    pub fn connect_todoist(&mut self, ctx: &egui::Context) {
+        if self.acct_pass.trim().is_empty() {
+            self.acct_error = Some(tr("Paste your Todoist API token first.").into());
+            return;
+        }
+        if self.data.accounts.iter().any(|a| a.todoist) {
+            self.acct_error = Some(tr("A Todoist account is already connected.").into());
+            return;
+        }
+        if self.shot.is_some() {
+            return;
+        }
+        self.acct_error = None;
+        let id = self.data.new_id();
+        self.data.accounts.push(Account { id, server: sync::todoist::API.into(), username: "Todoist".into(), todoist: true, ..Default::default() });
+        let token = std::mem::take(&mut self.acct_pass).trim().to_string();
+        self.sync_account(ctx, id, Some(token));
+    }
+
     /// Signs out: the calendars go, and the password leaves the keyring.
     pub fn remove_account(&mut self, id: u64) {
         self.snapshot();

@@ -82,6 +82,9 @@ pub struct Aids {
     pub morph: Option<f32>,
     /// `KATLENDAR_UPDATE=<version>`: the notice that that version is out *(picture)*
     pub update: Option<String>,
+    /// `KATLENDAR_REPEAT=<field>`: that repeat field (crep, erep, rep)
+    /// repeats every 2 weeks on Mo and We, 10 times
+    pub repeat: Option<String>,
 }
 
 /// The aids, read once.
@@ -125,6 +128,7 @@ fn read(var: impl Fn(&str) -> Option<String>) -> Aids {
         list_edit: set("LIST_EDIT"),
         new_list: on("NEW_LIST"),
         update: set("UPDATE"),
+        repeat: set("REPEAT"),
         morph: set("MORPH").and_then(|v| v.trim().parse::<f32>().ok()).map(|t| t.clamp(0.0, 1.0)),
         drag: set("DRAG").and_then(|v| {
             let (title, at) = v.rsplit_once('@')?;

@@ -7,6 +7,7 @@ mod frame;
 mod plan;
 mod prefs;
 mod quick;
+mod repeat;
 mod sample;
 mod tags;
 mod task;
@@ -19,6 +20,7 @@ pub use data::*;
 pub use frame::*;
 pub use prefs::*;
 pub use quick::*;
+pub use repeat::*;
 pub use task::*;
 
 use chrono::{NaiveDateTime, Timelike};

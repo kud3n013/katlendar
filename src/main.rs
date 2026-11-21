@@ -21,6 +21,7 @@ mod sync;
 mod tz;
 mod update;
 mod dialogs;
+mod repeat_ui;
 mod fonts;
 mod views;
 mod worker;

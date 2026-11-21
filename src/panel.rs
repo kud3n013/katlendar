@@ -647,8 +647,8 @@ impl App {
                 let visible_in_list = |t: &Task| p.show_scheduled_tasks || !self.data.task_is_scheduled(t.id);
                 let mut lists: Vec<(u64, String, String, Color32, Vec<u64>)> = Vec::new();
                 for id in std::iter::once(0).chain(self.data.lists.iter().map(|l| l.id)) {
-                    let (name, color, icon) = self.data.list_look(id);
-                    let name = if id == 0 { self.data.prefs.inbox_name() } else if name.trim().is_empty() { tr("Untitled list").to_string() } else { name };
+                    let (_, color, icon) = self.data.list_look(id);
+                    let name = self.data.list_title(id);
                     lists.push((id, name, icon, rgb(color), ids(&|t| t.list == id && visible_in_list(t))));
                 }
                 let done_ids = self.done_ids();
@@ -750,7 +750,7 @@ impl App {
         let before = self.data.list_look(lid);
         let mut look = before.clone();
         let hint = if lid == 0 { tr("Inbox") } else { tr("List name") };
-        self.look_fields(ui, &mut look, with_name.then_some(hint), focus);
+        self.look_fields(ui, &mut look, self.data.list_icon(lid), with_name.then_some(hint), focus);
         if look == before {
             return false;
         }
@@ -776,7 +776,7 @@ impl App {
         let out = egui::Area::new(ids::new_list()).order(egui::Order::Foreground).pivot(d.pivot).fixed_pos(d.at).show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_width(236.0);
-                self.look_fields(ui, &mut d.look, Some(tr("List name")), d.fresh);
+                self.look_fields(ui, &mut d.look, "", Some(tr("List name")), d.fresh);
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tr("Enter to add")).size(theme::size::TINY).color(muted));
@@ -807,8 +807,9 @@ impl App {
     }
 
     /// A list's name (when `name_hint` is given), colour and icon, changed
-    /// in place.
-    fn look_fields(&self, ui: &mut egui::Ui, look: &mut (String, [u8; 3], String), name_hint: Option<&str>, focus: bool) {
+    /// in place. The icons start with `default`, the list's own: its
+    /// service's logo, or the ring.
+    fn look_fields(&self, ui: &mut egui::Ui, look: &mut (String, [u8; 3], String), default: &str, name_hint: Option<&str>, focus: bool) {
         let (side, text, muted) = (self.pal.side, self.pal.text, self.pal.muted);
         if let Some(hint) = name_hint {
             let r = ui.add(egui::TextEdit::singleline(&mut look.0).hint_text(hint).desired_width(f32::INFINITY));
@@ -833,7 +834,7 @@ impl App {
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-            for glyph in std::iter::once("").chain(icons::LIST_ICONS) {
+            for glyph in std::iter::once(default).chain(icons::LIST_ICONS) {
                 let (gr, gresp) = ui.allocate_exact_size(vec2(27.0, 27.0), Sense::click());
                 let on = look.2 == glyph;
                 if on || gresp.hovered() {
@@ -1240,7 +1241,7 @@ impl App {
         if let Some(tid) = drop.filter(|_| over) {
             crate::stroke_squircle(p, r, theme::RADIUS, Stroke::new(1.5, color));
             if ctx.input(|i| i.pointer.any_released()) {
-                let name = if lid == 0 { self.data.prefs.inbox_name() } else { self.data.list_look(lid).0 };
+                let name = self.data.list_title(lid);
                 self.move_to_list(tid, lid);
                 self.drag_task = None;
                 self.say(ctx, trf("Moved to {}", &[&name]), true);
@@ -1342,8 +1343,8 @@ impl App {
     /// A list as the flyer shows it: the same heading and rows as the
     /// panel, always open.
     fn flyer_list(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, lid: u64) {
-        let (name, color, glyph) = self.data.list_look(lid);
-        let name = if lid == 0 { self.data.prefs.inbox_name() } else if name.trim().is_empty() { tr("Untitled list").to_string() } else { name };
+        let (_, color, glyph) = self.data.list_look(lid);
+        let name = self.data.list_title(lid);
         let color = rgb(color);
         let show_scheduled = self.data.prefs.show_scheduled_tasks;
         let mut tasks = self.open_tasks(None);

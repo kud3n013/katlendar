@@ -512,7 +512,7 @@ fn a_task_changed_on_the_server_updates_its_blocks() {
     d.lists.push(TaskList { id: 60, ..Default::default() });
     d.tasks.push(Task { id: 61, list: 60, title: "Old".into(), uid: Some("t".into()), href: Some("/t.ics".into()), ..Default::default() });
     d.events.push(Event { id: 62, task_id: Some(61), title: "Old".into(), ..Default::default() });
-    let task = crate::ics::FeedTask { uid: "t".into(), title: "New".into(), notes: "Server note".into(), due: None, priority: 0, done: false, href: Some("/t.ics".into()), etag: None };
+    let task = crate::ics::FeedTask { uid: "t".into(), title: "New".into(), notes: "Server note".into(), due: None, priority: 0, done: false, href: Some("/t.ics".into()), etag: None, ..Default::default() };
     d.apply_tasks(60, crate::sync::Delta { tasks: vec![task], ..Default::default() });
     let e = d.event(62).unwrap();
     assert_eq!((e.title.as_str(), e.notes.as_str()), ("New", "Server note"));
@@ -854,4 +854,68 @@ fn an_events_buffer_is_kept_but_only_when_set() {
     assert!(live.same_content(&e));
     live.take_edits(e.clone());
     assert_eq!(live.buffer, e.buffer);
+}
+
+#[test]
+fn a_synced_list_shows_its_services_logo_until_another_icon_is_picked() {
+    let mut d = empty();
+    d.accounts = vec![
+        Account { id: 50, todoist: true, ..Default::default() },
+        Account { id: 51, server: "https://dav.example.org".into(), ..Default::default() },
+    ];
+    d.lists = vec![
+        TaskList { id: 1, name: "Errands".into(), account: Some(50), ..Default::default() },
+        TaskList { id: 2, name: "Home".into(), account: Some(51), ..Default::default() },
+        TaskList { id: 3, name: "Mine".into(), ..Default::default() },
+    ];
+    assert_eq!(d.list_look(1).2, crate::icons::TODOIST);
+    assert_eq!(d.list_look(2).2, crate::icons::SERVER);
+    assert_eq!(d.list_look(3).2, "");
+    // picking another icon keeps it; picking the logo again goes back to none
+    let look = d.list_look(1);
+    d.set_list_look(1, (look.0.clone(), look.1, crate::icons::LIST_ICONS[2].to_string()));
+    assert_eq!(d.list_look(1).2, crate::icons::LIST_ICONS[2]);
+    d.set_list_look(1, (look.0, look.1, crate::icons::TODOIST.to_string()));
+    assert!(d.lists[0].icon.is_empty());
+}
+
+#[test]
+fn a_synced_lists_title_starts_with_its_service() {
+    let mut d = empty();
+    d.accounts = vec![
+        Account { id: 50, todoist: true, ..Default::default() },
+        Account { id: 51, server: "https://dav.example.org".into(), ..Default::default() },
+    ];
+    d.lists = vec![
+        TaskList { id: 1, name: "Inbox".into(), account: Some(50), ..Default::default() },
+        TaskList { id: 2, name: "Home".into(), account: Some(51), ..Default::default() },
+        TaskList { id: 3, name: "Mine".into(), ..Default::default() },
+    ];
+    assert_eq!(d.list_title(1), "Todoist - Inbox");
+    assert_eq!(d.list_title(2), "CalDAV - Home");
+    assert_eq!(d.list_title(3), "Mine");
+    // the name itself is kept as it was, for the editor and the server
+    assert_eq!(d.list_look(1).0, "Inbox");
+}
+
+#[test]
+fn deadlines_go_by_priority_until_put_in_order_by_hand() {
+    let mut d = empty();
+    let day = ymd(11, 20);
+    let due = |id: u64, priority: u8| Task { id, title: format!("t{id}"), due: Some(day), priority, ..Default::default() };
+    // none, low, high, medium; a finished one and one due elsewhere are left out
+    d.tasks = vec![due(1, 0), due(2, 7), due(3, 1), due(4, 5), Task { done: true, ..due(5, 1) }, Task { due: Some(ymd(11, 21)), ..due(6, 1) }];
+    assert_eq!(d.deadlines_on(day), vec![3, 4, 2, 1]);
+
+    // by hand: the low one first, the high one last
+    d.order_deadlines(day, &[2, 1, 4, 3]);
+    assert_eq!(d.deadlines_on(day), vec![2, 1, 4, 3]);
+
+    // a new one goes before the first of a lower priority: here the low one
+    d.tasks.push(due(7, 4));
+    assert_eq!(d.deadlines_on(day), vec![7, 2, 1, 4, 3]);
+
+    // an order kept for another day does not count once the due date moves
+    d.task_mut(1).unwrap().due_order = Some((ymd(11, 19), 0));
+    assert_eq!(d.deadlines_on(day), vec![7, 2, 4, 3, 1]);
 }

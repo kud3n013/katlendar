@@ -74,6 +74,9 @@ pub struct Account {
     /// a Proton account, read-only; the keyring holds its session and
     /// what opens its keys, never the password
     pub proton: bool,
+    /// a Todoist account, its projects task lists; the keyring holds the
+    /// API token the person pasted
+    pub todoist: bool,
 }
 
 /// An event deleted here that the server still has.
@@ -85,9 +88,26 @@ pub struct PendingDelete {
 }
 
 impl Account {
+    /// The glyph its task lists show unless one is picked: the service's
+    /// logo, or a server for one reached by its address.
+    /// The service's name, as a synced list's title starts with it.
+    pub fn service(&self) -> &'static str {
+        if self.todoist { "Todoist" } else if self.nextcloud { "Nextcloud" } else if self.google { "Google" } else if self.microsoft { "Microsoft" } else if self.proton { "Proton" } else { "CalDAV" }
+    }
+    pub fn icon(&self) -> &'static str {
+        use crate::icons;
+        if self.todoist {
+            icons::TODOIST
+        } else if self.nextcloud {
+            icons::NEXTCLOUD
+        } else {
+            icons::SERVER
+        }
+    }
+
     /// "name @ server" for lists.
     pub fn label(&self) -> String {
-        if self.google || self.microsoft || self.proton {
+        if self.google || self.microsoft || self.proton || self.todoist {
             return self.username.clone();
         }
         let host = self.server.split("://").last().unwrap_or("").split('/').next().unwrap_or("");

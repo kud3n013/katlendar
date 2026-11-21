@@ -399,6 +399,11 @@ impl Data {
             t.uid = Some(f.uid);
             t.href = f.href;
             t.etag = f.etag;
+            t.raw = f.raw;
+            if let Some(x) = f.extra {
+                t.tags = x.tags;
+                t.duration_min = x.duration_min;
+            }
             let id = t.id;
             self.sync_blocks(id);
         }

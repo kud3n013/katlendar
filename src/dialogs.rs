@@ -2,6 +2,7 @@
 
 use crate::strings::{tr, trf};
 use crate::ids;
+use crate::repeat_ui;
 use crate::motion;
 use crate::theme;
 use crate::icons;
@@ -72,8 +73,13 @@ impl App {
 /// calendar apps pick dates. `cur` is the day shown picked (and the month
 /// it opens on, else today's). Gives back the day clicked.
 pub(crate) fn date_pick(ui: &mut egui::Ui, salt: &str, cur: Option<NaiveDate>, look: PickLook) -> Option<NaiveDate> {
-    use chrono::Datelike;
     let b = ui.add(egui::Button::new(RichText::new(icons::CALENDAR).size(theme::size::BODY)).min_size(egui::vec2(24.0, 0.0))).on_hover_text(tr("Pick a date"));
+    date_popup(ui, &b, salt, cur, look)
+}
+
+/// The month that drops down under `b`, any button, when it is clicked.
+pub(crate) fn date_popup(ui: &mut egui::Ui, b: &egui::Response, salt: &str, cur: Option<NaiveDate>, look: PickLook) -> Option<NaiveDate> {
+    use chrono::Datelike;
     let id = ids::date_pick(salt);
     let today = Local::now().date_naive();
     let open_on = cur.unwrap_or(today).with_day(1).unwrap_or(today);
@@ -82,7 +88,7 @@ pub(crate) fn date_pick(ui: &mut egui::Ui, salt: &str, cur: Option<NaiveDate>, l
         ui.data_mut(|d| d.insert_temp(id, open_on));
     }
     let mut out = None;
-    egui::Popup::from_toggle_button_response(&b).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+    egui::Popup::from_toggle_button_response(b).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let first = ui.data(|d| d.get_temp::<NaiveDate>(id)).unwrap_or(open_on);
         let back = (first.weekday().num_days_from_sunday() as i64 - look.first_day as i64).rem_euclid(7);
         let start = first - Duration::days(back);
@@ -343,8 +349,13 @@ fn buffer_len(m: i64) -> String {
     }
 }
 
-fn editor_label(ui: &mut egui::Ui, text: &str, muted: egui::Color32) {
-    ui.add_sized([EDITOR_LABEL_W, 20.0], egui::Label::new(RichText::new(text).color(muted)).halign(Align::LEFT));
+/// An editor field's name, at the left of its column.
+fn editor_label(ui: &mut egui::Ui, text: &str, muted: egui::Color32) -> egui::Response {
+    ui.allocate_ui_with_layout(egui::vec2(EDITOR_LABEL_W, 20.0), egui::Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_width(EDITOR_LABEL_W);
+        ui.label(RichText::new(text).color(muted))
+    })
+    .inner
 }
 
 /// The editor's notes, at the end of its fields; Ctrl+Enter saves.
@@ -441,49 +452,10 @@ fn color_row(ui: &mut egui::Ui, cal_color: [u8; 3], color: &mut Option<[u8; 3]>)
     swatches(ui, cal_color, tr("Calendar colour"), color);
 }
 
-/// The repeat dropdown: the fixed patterns and Custom, which starts on
-/// the weekday of `day`; returns whether the pick changed.
-fn repeat_combo(ui: &mut egui::Ui, id: &str, r: &mut Repeat, day: NaiveDate) -> bool {
-    let was = *r;
-    let shown = if matches!(r, Repeat::Custom(_)) { tr("Custom").to_string() } else { r.label() };
-    egui::ComboBox::from_id_salt(id).selected_text(shown).show_ui(ui, |ui| {
-        for v in Repeat::ALL {
-            ui.selectable_value(r, v, v.label());
-        }
-        let custom = matches!(r, Repeat::Custom(_));
-        if ui.selectable_label(custom, tr("Custom")).clicked() && !custom {
-            *r = Repeat::custom_from(day);
-        }
-    });
-    *r != was
-}
-
-/// Mo to Su as toggles over a weekday mask: bit 0 Monday to bit 6 Sunday.
+/// Mo to Su as round toggles over a weekday mask: bit 0 Monday to bit 6
+/// Sunday.
 pub(crate) fn weekday_chips(ui: &mut egui::Ui, days: &mut u8) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 3.0;
-        for (i, d) in [tr("Mo"), tr("Tu"), tr("We"), tr("Th"), tr("Fr"), tr("Sa"), tr("Su")].iter().enumerate() {
-            let bit = 1u8 << i;
-            if ui.selectable_label(*days & bit != 0, *d).clicked() {
-                *days ^= bit;
-            }
-        }
-    });
-}
-
-/// The weekday row under a Custom repeat, in a two-column grid.
-/// `editor` lays the label out as an editor window's labels, else as the
-/// flyout's.
-fn custom_days_row(ui: &mut egui::Ui, r: &mut Repeat, muted: egui::Color32, editor: bool) {
-    if let Repeat::Custom(days) = r {
-        if editor {
-            editor_label(ui, tr("On"), muted);
-        } else {
-            ui.label(RichText::new(tr("On")).color(muted));
-        }
-        weekday_chips(ui, days);
-        ui.end_row();
-    }
+    repeat_ui::day_chips(ui, days, 1, false);
 }
 
 /// A row of colour dots: the first, `base`, for None, then the palette.
@@ -593,7 +565,7 @@ impl App {
         let ids = std::iter::once(0).chain(self.data.lists.iter().filter(|l| !writable || !l.read_only).map(|l| l.id));
         ids.map(|id| {
             let (_, col, icon) = self.data.list_look(id);
-            let name = if id == 0 { self.data.prefs.inbox_name() } else { self.data.list_look(id).0 };
+            let name = self.data.list_title(id);
             let icon = if icon.is_empty() { icons::CIRCLE.to_string() } else { icon };
             (id, format!("{icon} {name}"), rgb(col))
         })
@@ -613,6 +585,7 @@ impl App {
         self.ui_settings_window(ctx);
         self.dlg_command(ctx);
         self.dlg_new_task(ctx);
+        self.dlg_due_plan(ctx);
         self.update_notice(ctx);
         self.dlg_toast(ctx);
     }
@@ -676,9 +649,7 @@ impl App {
                 let mut morph = morph_begin(outer_ui, c.kind as u8);
                 let ui = &mut morph;
                 ui.add_space(4.0);
-                let label = |ui: &mut egui::Ui, t: &str| {
-                    ui.label(RichText::new(t).color(muted));
-                };
+                let label = |ui: &mut egui::Ui, t: &str| ui.label(RichText::new(t).color(muted));
                 egui::Grid::new("creategrid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                     // every calendar that takes changes, one's own and synced ones
                     label(ui, tr("Calendar"));
@@ -716,22 +687,9 @@ impl App {
                     });
                     ui.end_row();
 
-                    label(ui, tr("Repeat"));
-                    ui.horizontal(|ui| {
-                        if repeat_combo(ui, "crep", &mut c.repeat, c.ev.start.date()) && c.repeat != Repeat::None {
-                            c.until_text = c.repeat.first_until(c.ev.start.date()).to_string();
-                        }
-                        if c.repeat != Repeat::None {
-                            if is_task {
-                                ui.label(RichText::new("when completed").color(muted)).on_hover_text(tr("Ticking the task off leaves a fresh one, due the next time"));
-                            } else {
-                                ui.label(RichText::new("until").color(muted));
-                                date_field(ui, "cuntil", &mut c.until_text, 100.0, look);
-                            }
-                        }
-                    });
-                    ui.end_row();
-                    custom_days_row(ui, &mut c.repeat, muted, false);
+                    let day = c.ev.start.date();
+                    let ends_tip = is_task.then(|| tr("Ticking the task off leaves a fresh one, due the next time"));
+                    repeat_ui::repeat_rows(ui, "crep", &mut c.repeat, &mut c.ends, day, look, is_task, &label, None, ends_tip);
 
                     if is_task {
                         label(ui, tr("List"));
@@ -826,17 +784,6 @@ impl App {
                 }
             },
         };
-        // an event repeats up to a day, which has to be readable
-        let mut until: Option<NaiveDate> = None;
-        if save && c.kind == CreateKind::Event && c.repeat != Repeat::None {
-            match NaiveDate::parse_from_str(c.until_text.trim(), "%Y-%m-%d") {
-                Ok(d) => until = Some(d),
-                Err(_) => {
-                    self.warn(ctx, tr("The last day should look like 2026-11-30"));
-                    save = false;
-                }
-            }
-        }
         if to_frame {
             let day = c.ev.start.date();
             let s = (c.ev.start - midnight(day)).num_minutes();
@@ -873,6 +820,7 @@ impl App {
                         // a repeat counts from the due date: without one, the block's day
                         due: due.or((c.repeat != Repeat::None).then_some(day)),
                         repeat: c.repeat,
+                        repeat_end: if c.repeat == Repeat::None { Ends::Never } else { c.ends },
                         ..c.task.clone()
                     },
                 );
@@ -882,7 +830,7 @@ impl App {
             } else {
                 // a repeating event is laid out as one event per time, so each
                 // can be moved or removed alone and all of them sync like any other
-                let times = until.map(|u| c.repeat.days_after(day, u)).unwrap_or_default();
+                let times = c.repeat.times_after(day, c.ends);
                 for d in &times {
                     let mut copy = ev.clone();
                     copy.id = self.data.new_id();
@@ -1207,6 +1155,48 @@ impl App {
     }
 
     /// Ctrl+T: a bar in the middle, like the command bar, for a new task.
+    /// Asked when a deadline is let go in the hours: plan a session of the
+    /// task there, or send the deadline back to its day.
+    fn dlg_due_plan(&mut self, ctx: &egui::Context) {
+        let Some(plan) = self.due_plan.as_ref() else { return };
+        let (tid, start, at) = (plan.task, plan.start, plan.at);
+        let Some(t) = self.data.task(tid).cloned() else {
+            self.due_plan = None;
+            return;
+        };
+        let p = self.data.prefs.clone();
+        let (muted, warn) = (self.pal.muted, theme::DANGER);
+        let (mut go, mut back) = (false, false);
+        let resp = egui::Modal::new(ids::due_plan()).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.label(RichText::new(trf("Plan \"{}\" here?", &[&t.title])).size(theme::size::LARGE).strong());
+            ui.add_space(4.0);
+            ui.label(format!("{}, {}", start.format("%A, %b %-d"), p.fmt_time(start.time())));
+            if let Some(due) = t.due {
+                ui.label(RichText::new(trf("Its deadline stays on {}.", &[&due.format("%A, %b %-d")])).color(muted));
+                if start.date() > due {
+                    ui.label(RichText::new(tr("This is after the deadline.")).color(warn));
+                }
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                go = ui.button(RichText::new(tr("Plan here")).strong()).on_hover_text(tr("Enter")).clicked();
+                back = ui.button(tr("Cancel")).on_hover_text(tr("Esc")).clicked();
+            });
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                go = true;
+            }
+        });
+        if go {
+            self.due_plan = None;
+            self.schedule_task(ctx, tid, start);
+        } else if back || resp.should_close() {
+            // the deadline flies back to its day
+            self.due_plan = None;
+            self.due_chips.from = Some((tid, at));
+        }
+    }
+
     fn dlg_new_task(&mut self, ctx: &egui::Context) {
         if !self.new_task_open {
             return;
@@ -1214,7 +1204,7 @@ impl App {
         let muted = self.pal.muted;
         let focus = std::mem::take(&mut self.new_task_focus);
         let list_name = match self.data.lists.iter().find(|l| l.id == self.new_task_list) {
-            Some(l) => l.name.clone(),
+            Some(l) => self.data.list_title(l.id),
             None => {
                 self.new_task_list = 0;
                 "your Inbox".to_string()
@@ -1578,20 +1568,10 @@ impl App {
                     editor_label(ui, tr("Location"), muted);
                     ui.add(egui::TextEdit::singleline(&mut place).hint_text(tr("Add a place")).desired_width(f32::INFINITY));
                     ui.end_row();
-                    editor_label(ui, tr("Repeat"), muted);
-                    ui.horizontal(|ui| {
-                        if repeat_combo(ui, "erep", &mut ed.repeat, ed.ev.start.date()) && ed.repeat != Repeat::None {
-                            ed.until_text = ed.repeat.first_until(ed.ev.start.date()).to_string();
-                        }
-                        if ed.repeat != Repeat::None {
-                            ui.label(RichText::new(tr("until")).color(muted));
-                            date_field(ui, "euntil", &mut ed.until_text, 100.0, look);
-                        }
-                    })
-                    .response
-                    .on_hover_text(tr("Saving adds a copy of this event each time, up to the last day"));
-                    ui.end_row();
-                    custom_days_row(ui, &mut ed.repeat, muted, true);
+                    let day = ed.ev.start.date();
+                    let label = |ui: &mut egui::Ui, t: &str| editor_label(ui, t, muted);
+                    let tip = tr("Saving adds a copy of this event each time, up to the last one");
+                    repeat_ui::repeat_rows(ui, "erep", &mut ed.repeat, &mut ed.ends, day, look, false, &label, Some(tip), None);
                 }
         });
         // a task's block shows the whole task, as its own editor does
@@ -1698,16 +1678,10 @@ impl App {
             self.warn(ctx, tr("The due date should look like 2026-11-30"));
             return self.editor = Some(ed);
         }
-        // a repeat is laid out as copies of the event up to a last day
+        // a repeat is laid out as copies of the event, until it ends
         let mut copies: Vec<NaiveDate> = Vec::new();
         if save && ed.repeat != Repeat::None && ed.ev.task_id.is_none() && self.data.locked(&ed.ev).is_none() {
-            match NaiveDate::parse_from_str(ed.until_text.trim(), "%Y-%m-%d") {
-                Ok(until) => copies = ed.repeat.days_after(ed.ev.start.date(), until),
-                Err(_) => {
-                    self.warn(ctx, tr("The last day should look like 2026-11-30"));
-                    return self.editor = Some(ed);
-                }
-            }
+            copies = ed.repeat.times_after(ed.ev.start.date(), ed.ends);
         }
         if save && self.data.locked(&ed.ev).is_some() {
             // only the side notes and the buffer are its own here
@@ -1865,11 +1839,10 @@ impl App {
                 }
             });
             ui.end_row();
-            editor_label(ui, tr("Repeat due"), muted);
             let day = ed.task.due.unwrap_or_else(|| chrono::Local::now().date_naive());
-            repeat_combo(ui, "rep", &mut ed.task.repeat, day);
-            ui.end_row();
-            custom_days_row(ui, &mut ed.task.repeat, muted, true);
+            let label = |ui: &mut egui::Ui, t: &str| editor_label(ui, t, muted);
+            let tip = tr("Ticking the task off leaves a fresh one, due the next time");
+            repeat_ui::repeat_rows(ui, "rep", &mut ed.task.repeat, &mut ed.task.repeat_end, day, look, true, &label, Some(tip), Some(tip));
             editor_label(ui, tr("Earliest start"), muted);
             ui.horizontal(|ui| date_field(ui, "tearliest", &mut ed.earliest_text, 96.0, look));
             ui.end_row();
@@ -2141,7 +2114,7 @@ mod tests {
         let mut ed = app.editor.take().unwrap();
         let day = ed.ev.start.date();
         ed.repeat = Repeat::Weekly;
-        ed.until_text = (day + Duration::weeks(3)).to_string();
+        ed.ends = Ends::On(day + Duration::weeks(3));
         ed.ev.color = Some(EVENT_COLORS[0].0);
         let ctx = egui::Context::default();
         app.finish_event_edit(&ctx, ed, Pressed { save: true, ..Default::default() });
