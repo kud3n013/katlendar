@@ -149,7 +149,7 @@ fn row(ui: &mut egui::Ui, label: &str, tip: &str, add: impl FnOnce(&mut egui::Ui
     }
     let avail = ui.available_width();
     let label_w = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(theme::size::TITLE), Color32::WHITE).size().x + if tip.is_empty() { 0.0 } else { 26.0 };
-    let wide = (avail * 0.42).clamp(170.0, CONTROL_W);
+    let wide = control_col(avail);
     // too narrow for the name beside its control: the control goes below
     let stack = label_w + 24.0 + wide > avail;
     let cw = if stack { avail.min(CONTROL_W) } else { wide };
@@ -163,14 +163,7 @@ fn row(ui: &mut egui::Ui, label: &str, tip: &str, add: impl FnOnce(&mut egui::Ui
             ui.add(egui::Label::new(RichText::new(icons::INFO).size(theme::size::UI).weak()).sense(egui::Sense::hover())).on_hover_cursor(egui::CursorIcon::Help).on_hover_text(tip);
         }
     };
-    let control = |ui: &mut egui::Ui| {
-        ui.allocate_ui_with_layout(vec2(cw, 44.0), Layout::left_to_right(Align::Center), |ui| {
-            ui.spacing_mut().interact_size.y = 44.0;
-            ui.spacing_mut().button_padding = vec2(14.0, 10.0);
-            ui.style_mut().override_font_id = Some(FontId::proportional(theme::size::LARGE));
-            add(ui);
-        });
-    };
+    let control = |ui: &mut egui::Ui| control_box(ui, cw, add);
     if stack {
         ui.add_space(6.0);
         ui.horizontal(name);
@@ -183,6 +176,92 @@ fn row(ui: &mut egui::Ui, label: &str, tip: &str, add: impl FnOnce(&mut egui::Ui
         name(ui);
         ui.with_layout(Layout::right_to_left(Align::Center), control);
     });
+}
+
+/// How wide the column of controls is on a page `avail` wide.
+fn control_col(avail: f32) -> f32 {
+    (avail * 0.42).clamp(170.0, CONTROL_W)
+}
+
+/// The box a row's controls are drawn in, `cw` wide.
+fn control_box(ui: &mut egui::Ui, cw: f32, add: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(vec2(cw, 44.0), Layout::left_to_right(Align::Center), |ui| {
+        ui.set_max_width(cw);
+        ui.spacing_mut().interact_size.y = 44.0;
+        ui.spacing_mut().button_padding = vec2(14.0, 10.0);
+        ui.style_mut().override_font_id = Some(FontId::proportional(theme::size::LARGE));
+        add(ui);
+    });
+}
+
+/// How wide the controls of the `cal_row`s are, and whether they go under
+/// the names: they keep the page's column of controls, or grow to the
+/// `need` they ask for while the names keep some room, else go below.
+fn cal_col(avail: f32, need: f32) -> (f32, bool) {
+    const NAME_W: f32 = 140.0;
+    let cw = control_col(avail);
+    if cw >= need {
+        (cw, false)
+    } else if need + 16.0 + NAME_W <= avail {
+        (need, false)
+    } else {
+        (avail.min(CONTROL_W).max(cw), true)
+    }
+}
+
+/// How wide a `pick` has to be to show the longest of its `options` whole.
+fn pick_need<T>(ui: &egui::Ui, options: &[(T, String)]) -> f32 {
+    let font = FontId::proportional(theme::size::LARGE);
+    let text = options.iter().map(|(_, l)| ui.painter().layout_no_wrap(l.clone(), font.clone(), Color32::WHITE).size().x).fold(0.0, f32::max);
+    // the padding of a row's controls, and the arrow after the text
+    text + 2.0 * 14.0 + ui.spacing().icon_width + ui.spacing().item_spacing.x
+}
+
+/// A calendar's line on a page that sets something for each calendar. Its
+/// controls keep the column under `column_heads`; a long name is cut short
+/// instead, and shown whole on hover. When that column is narrower than
+/// the controls `need`, they go under the name.
+fn cal_row(ui: &mut egui::Ui, name: &str, need: f32, add: impl FnOnce(&mut egui::Ui)) {
+    if !shown(ui, &[name]) {
+        return;
+    }
+    let avail = ui.available_width();
+    let (cw, stack) = cal_col(avail, need);
+    ui.data_mut(|d| d.insert_temp(ids::control_w(), cw));
+    if stack {
+        ui.add_space(6.0);
+        ui.add(egui::Label::new(RichText::new(name).size(theme::size::TITLE)).truncate());
+        ui.add_space(2.0);
+        control_box(ui, cw, add);
+        ui.add_space(8.0);
+        return;
+    }
+    ui.allocate_ui_with_layout(vec2(avail, ROW_H), Layout::left_to_right(Align::Center), |ui| {
+        let name_w = (avail - cw - 16.0).max(0.0);
+        ui.allocate_ui_with_layout(vec2(name_w, ROW_H), Layout::left_to_right(Align::Center), |ui| {
+            ui.set_max_width(name_w);
+            ui.add(egui::Label::new(RichText::new(name).size(theme::size::TITLE)).truncate());
+        });
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| control_box(ui, cw, add));
+    });
+}
+
+/// Names over the columns of the `cal_row`s below, which ask for `need`: for each, where it starts
+/// in the box of controls, how wide it is, and the name.
+fn column_heads(ui: &mut egui::Ui, need: f32, heads: &[(f32, f32, &str)], muted: Color32) {
+    if finding(ui) {
+        return;
+    }
+    let avail = ui.available_width();
+    let (cw, stack) = cal_col(avail, need);
+    let left = if stack { 0.0 } else { avail - cw };
+    let (r, _) = ui.allocate_exact_size(vec2(avail, 22.0), Sense::hover());
+    for &(x, w, text) in heads {
+        let cell = egui::Rect::from_min_size(egui::pos2(r.left() + left + x + 4.0, r.top()), vec2((w - 4.0).max(0.0), r.height()));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(cell).layout(Layout::left_to_right(Align::Center)), |ui| {
+            ui.add(egui::Label::new(RichText::new(text).size(theme::size::CAPTION).color(muted)).truncate());
+        });
+    }
 }
 
 /// What the Maps page knows of the Google key: what is being typed, and
@@ -557,24 +636,15 @@ impl App {
         let follow = tr("As above").to_string();
         let providers = [(None, follow.clone()), (Some(MapProvider::OpenStreetMap), MapProvider::OpenStreetMap.name().to_string()), (Some(MapProvider::Google), MapProvider::Google.name().to_string())];
         let opens: Vec<(Option<OpenIn>, String)> = std::iter::once((None, follow)).chain(OpenIn::all().into_iter().map(|o| (Some(o), o.name().to_string()))).collect();
-        // the names of the two columns, over the choices; as `row` places them
-        let avail = ui.available_width();
-        let half = (((avail * 0.42).clamp(170.0, CONTROL_W) - 8.0) / 2.0).floor();
-        ui.allocate_ui_with_layout(vec2(avail, 22.0), Layout::right_to_left(Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            for t in [tr("Open in"), tr("Find with")] {
-                ui.allocate_ui_with_layout(vec2(half, 22.0), Layout::left_to_right(Align::Center), |ui| {
-                    ui.set_width(half);
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(t).size(theme::size::CAPTION).color(muted));
-                });
-            }
-        });
+        // the names of the two columns, over the choices
+        let need = 2.0 * pick_need(ui, &providers).max(pick_need(ui, &opens)) + 8.0;
+        let half = ((cal_col(ui.available_width(), need).0 - 8.0) / 2.0).floor();
+        column_heads(ui, need, &[(0.0, half, tr("Find with")), (half + 8.0, half, tr("Open in"))], muted);
         let cals: Vec<(u64, String)> = self.data.calendars.iter().map(|c| (c.id, c.name.clone())).collect();
         for (cid, name) in cals {
             let mut m = self.data.cal_map(cid);
             let was = m;
-            row(ui, &name, "", |ui| {
+            cal_row(ui, &name, need, |ui| {
                 let cw = ui.data(|d| d.get_temp::<f32>(ids::control_w())).unwrap_or(CONTROL_W);
                 let half = ((cw - 8.0) / 2.0).floor();
                 ui.spacing_mut().item_spacing.x = 8.0;
@@ -744,18 +814,24 @@ impl App {
         row(ui, tr("Tasks in buffers"), tr("Whether \"Plan my tasks\" may put tasks into buffer time."), |ui| {
             combo(ui, "bk", &mut p.buffers_keep_out, &[(true, tr("Keep tasks out").into()), (false, tr("Allow tasks").into())]);
         });
+        // each calendar: a switch, then the two lengths under their names
+        const SWITCH_W: f32 = 38.0;
+        let lens: Vec<(i64, String)> = BUFFER_CHOICES.iter().map(|m| (*m, crate::dialogs::buffer_len(*m))).collect();
+        let len_w = |cw: f32| ((cw - SWITCH_W - 16.0) / 2.0).floor();
+        let need = SWITCH_W + 16.0 + 2.0 * pick_need(ui, &lens);
+        let w = len_w(cal_col(ui.available_width(), need).0);
+        column_heads(ui, need, &[(SWITCH_W + 8.0, w, tr("Before")), (SWITCH_W + 16.0 + w, w, tr("After"))], muted);
         let cals: Vec<(u64, String)> = self.data.calendars.iter().map(|c| (c.id, c.name.clone())).collect();
         for (cid, name) in cals {
             let b = self.data.prefs.buffer_mut(cid);
-            row(ui, &name, "", |ui| {
+            cal_row(ui, &name, need, |ui| {
+                let cw = ui.data(|d| d.get_temp::<f32>(ids::control_w())).unwrap_or(CONTROL_W);
+                let w = len_w(cw);
                 ui.spacing_mut().item_spacing.x = 8.0;
                 switch(ui, &mut b.enabled, accent);
                 if b.enabled {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(tr("before")).size(theme::size::UI).color(muted));
-                    crate::dialogs::buffer_pick(ui, ("bb", cid), 86.0, &mut b.before_min);
-                    ui.label(RichText::new(tr("after")).size(theme::size::UI).color(muted));
-                    crate::dialogs::buffer_pick(ui, ("ba", cid), 86.0, &mut b.after_min);
+                    pick(ui, ("bb", cid), w, &mut b.before_min, &lens).on_hover_text(tr("Free time before each event"));
+                    pick(ui, ("ba", cid), w, &mut b.after_min, &lens).on_hover_text(tr("Free time after each event"));
                 }
             });
         }
@@ -1470,7 +1546,7 @@ impl App {
                         }
                     }
                     4 => {
-                        help(ui, "katlendar has no registration of its own with Google, so you bring one: in the Google Cloud console, make a project, switch on the CalDAV API, add yourself as a test user on the consent screen, and make an OAuth client ID of the type \"Desktop app\". Paste its client ID and client secret here, or the whole JSON file it lets you download. While the project is in Testing, Google asks you to sign in again every 7 days.");
+                        help(ui, tr("katlendar has no registration of its own with Google, so you bring one: in the Google Cloud console, make a project, switch on the CalDAV API, set up the sign-in screen, choose Publish app under Audience, and make an OAuth client ID of the type \"Desktop app\". Paste its client ID and client secret here, or the whole JSON file it lets you download. Google then says the app isn't verified, because it hasn't reviewed a project you made yourself; go on through Advanced. A project left in Testing asks you to sign in again every 7 days."));
                         field(ui, &mut self.g_email, tr("Your Google address"), false);
                         setup_links(ui, &[(tr("Step-by-step guide"), GUIDE_GOOGLE), (tr("Google Cloud console"), "https://console.cloud.google.com/auth/clients")]);
                         field(ui, &mut self.g_client_id, tr("Client ID, ending in .apps.googleusercontent.com"), false);
