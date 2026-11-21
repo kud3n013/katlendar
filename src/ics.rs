@@ -715,10 +715,16 @@ fn param_text(v: &str) -> String {
     v.trim().replace('"', "'").replace(['\r', '\n'], " ")
 }
 
+/// The name in Apple's line: the first line of the location, as Apple
+/// puts the address on the lines after it.
+fn apple_title(location: &str) -> String {
+    param_text(location.trim().lines().next().unwrap_or(""))
+}
+
 /// Apple's line for a place on the map, which Apple Calendar and iOS
 /// read to show it.
 fn apple_location(text: &str, (lat, lon): (f64, f64)) -> String {
-    format!("X-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-TITLE=\"{}\":geo:{},{}", param_text(text), geo_number(lat), geo_number(lon))
+    format!("X-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-TITLE=\"{}\":geo:{},{}", apple_title(text), geo_number(lat), geo_number(lon))
 }
 
 /// The lines that hold a place, each with its new line; None leaves it
@@ -743,7 +749,8 @@ fn same_place_line(key: &str, params: &[(String, String)], value: &str, location
         // Apple's line also names the place
         _ => {
             let title = params.iter().find(|(k, _)| k == "X-TITLE").map(|(_, v)| v.as_str()).unwrap_or("");
-            same_geo(parse_geo_uri(value), geo) && title.trim() == param_text(location)
+            // the name alone, as Apple writes it, or the whole location
+            same_geo(parse_geo_uri(value), geo) && (title.trim() == apple_title(location) || title.trim() == param_text(location))
         }
     }
 }
@@ -1097,6 +1104,72 @@ pub fn write_todo(raw: Option<&str>, uid: &str, f: &TaskFields, stamp: NaiveDate
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Places as real servers send them: Google over CalDAV, iCloud from an
+    /// iPhone, Nextcloud's web app and Thunderbird.
+    #[test]
+    fn places_from_real_servers() {
+        let now = NaiveDate::from_ymd_opt(2026, 11, 21).unwrap().and_hms_opt(12, 0, 0).unwrap();
+        let place = |text: &str| parse(text, now).unwrap().events.remove(0).place.unwrap();
+        let g = place(include_str!("sync/fixtures/google-caldav.ics"));
+        assert_eq!(g.text, "Dishoom Covent Garden, 12 Upper St Martin's Ln, London WC2H 9FB, UK");
+        assert_eq!(g.geo, None);
+        let a = place(include_str!("sync/fixtures/icloud.ics"));
+        assert!(a.text.starts_with("Berliner Philharmonie"), "{}", a.text);
+        let (lat, lon) = a.geo.unwrap();
+        assert!((lat - 52.509722).abs() < 1e-6 && (lon - 13.369722).abs() < 1e-6);
+        assert_eq!(place(include_str!("sync/fixtures/nextcloud.ics")).text, "Praxis Dr. Weber, Kastanienallee 12, Berlin");
+        let t = place(include_str!("sync/fixtures/thunderbird.ics"));
+        assert_eq!((t.text.as_str(), t.geo), ("Café Einstein Stammhaus", None));
+    }
+
+    /// What other apps wrote stays when a spot is added or nothing changes.
+    #[test]
+    fn real_events_written_back() {
+        let stamp = NaiveDate::from_ymd_opt(2026, 11, 21).unwrap().and_hms_opt(12, 0, 0).unwrap();
+        let reread = |text: &str| read_event(text).unwrap().1;
+
+        // Google: a spot added to its words; the reminder and its own lines stay
+        let raw = include_str!("sync/fixtures/google-caldav.ics");
+        let (uid, mut f) = read_event(raw).unwrap();
+        assert_eq!(uid, "5k2f8l3n9q0r1s4t6u7v8w9x0y@google.com");
+        let unchanged = unfold(&write_event(Some(raw), &uid, &f, stamp)).join("\n");
+        assert!(unchanged.contains("LOCATION:Dishoom Covent Garden\\, 12 Upper St Martin's Ln\\, London WC2H 9FB\\, UK"), "{unchanged}");
+        assert!(!unchanged.contains("GEO") && !unchanged.contains("X-APPLE"), "{unchanged}");
+        f.geo = Some((51.51243, -0.12699));
+        let out = write_event(Some(raw), &uid, &f, stamp);
+        for kept in ["UID:5k2f8l3n9q0r1s4t6u7v8w9x0y@google.com", "BEGIN:VALARM", "TRIGGER:-P0DT0H10M0S", "X-WR-CALNAME:Personal", "BEGIN:VTIMEZONE", "TZID=Europe/London"] {
+            assert!(out.contains(kept), "{kept} went: {out}");
+        }
+        assert_eq!(reread(&out).geo, Some((51.51243, -0.12699)));
+        assert_eq!(reread(&out).location, f.location);
+
+        // iCloud: an unchanged write keeps Apple's line whole
+        let raw = include_str!("sync/fixtures/icloud.ics");
+        let (uid, f) = read_event(raw).unwrap();
+        assert_eq!(f.location, "Berliner Philharmonie\nHerbert-von-Karajan-Straße 1, 10785 Berlin, Germany");
+        let out = write_event(Some(raw), &uid, &f, stamp);
+        let joined = unfold(&out).join("\n");
+        assert!(joined.contains("X-APPLE-MAPKIT-HANDLE=CAESvAEa") && joined.contains("X-APPLE-RADIUS=141.1750694966316"), "{out}");
+        assert!(joined.contains("X-APPLE-TRAVEL-ADVISORY-BEHAVIOR:AUTOMATIC") && joined.contains("X-WR-ALARMUID"), "{out}");
+        assert_eq!(reread(&out), f);
+        // the standard spot line is added for apps that read only that
+        assert!(joined.contains("GEO:52.509722;13.369722"), "{out}");
+        assert!(out.lines().all(|l| l.len() <= 76), "lines are folded");
+        // a spot moved: Apple's line is new, named as Apple names it
+        let moved = EventFields { geo: Some((52.51, 13.37)), ..f.clone() };
+        let out = unfold(&write_event(Some(raw), &uid, &moved, stamp)).join("\n");
+        assert!(out.contains("X-TITLE=\"Berliner Philharmonie\":geo:52.51,13.37") && !out.contains("MAPKIT"), "{out}");
+
+        // Nextcloud and Thunderbird: a spot added reads back, their lines stay
+        for (raw, kept) in [(include_str!("sync/fixtures/nextcloud.ics"), "SEQUENCE:"), (include_str!("sync/fixtures/thunderbird.ics"), "X-MOZ-GENERATION:2")] {
+            let (uid, mut f) = read_event(raw).unwrap();
+            f.geo = Some((52.53, 13.41));
+            let out = write_event(Some(raw), &uid, &f, stamp);
+            assert!(out.contains(kept), "{out}");
+            assert_eq!(reread(&out).geo, Some((52.53, 13.41)));
+        }
+    }
 
     fn at(y: i32, m: u32, d: u32, h: u32, mi: u32) -> NaiveDateTime {
         NaiveDate::from_ymd_opt(y, m, d).unwrap().and_hms_opt(h, mi, 0).unwrap()

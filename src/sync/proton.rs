@@ -1118,6 +1118,28 @@ mod tests {
         assert!(matches!(sign_in(&base, "me", "hunter2", " 123456 ", "", Some(&token)), Ok(SignIn::Done(_))));
     }
 
+    /// An event of Proton's web app, its parts decrypted, read as `pull`
+    /// reads it; and one of ours, split as it is written.
+    #[test]
+    fn places_through_proton_parts() {
+        let now = NaiveDate::from_ymd_opt(2026, 11, 21).unwrap().and_hms_opt(12, 0, 0).unwrap();
+        let read = |lines: &[String]| ics::parse(&wrap(&lines.iter().collect::<Vec<_>>()), now).unwrap().events.remove(0);
+        let parts = [include_str!("fixtures/proton-shared-signed.ics"), include_str!("fixtures/proton-shared-encrypted.ics"), include_str!("fixtures/proton-calendar-signed.ics")].map(str::to_string);
+        let e = read(&merge(&parts));
+        assert_eq!((e.title.as_str(), e.place), ("Museum visit", crate::model::Place::named("Kunsthaus Zürich, Heimplatz 1, 8001 Zürich, Switzerland")));
+
+        // ours: the place and its spot go in the encrypted part only
+        let fields = ics::EventFields { summary: "Museum visit".into(), start: now, end: now + chrono::Duration::hours(1), location: "Kunsthaus Zürich".into(), geo: Some((47.37028, 8.54806)), ..Default::default() };
+        let lines = event_lines(&ics::write_event(None, "u1", &fields, now));
+        let (signed, sealed, own) = split_parts(&lines);
+        let has = |part: &str, name: &str| event_lines(part).iter().any(|l| name_of(l) == name);
+        for name in ["LOCATION", "GEO", "X-APPLE-STRUCTURED-LOCATION"] {
+            assert!(has(&sealed, name) && !has(&signed, name), "{name}");
+        }
+        let e = read(&merge(&[signed, sealed, own.unwrap_or_default()]));
+        assert_eq!(e.place, crate::model::Place::of("Kunsthaus Zürich", Some((47.37028, 8.54806))));
+    }
+
     #[test]
     fn parts_merge_into_one_event() {
         let a = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:x\nDTSTART:20261116T150000Z\nSUMMARY:old\nEND:VEVENT\nEND:VCALENDAR".to_string();
