@@ -413,6 +413,14 @@ impl App {
             data.accounts.push(Account { id: 920, server: crate::sync::todoist::API.into(), username: "Todoist".into(), home: Some(crate::sync::todoist::API.into()), todoist: true, ..Default::default() });
             data.lists.push(TaskList { id: 921, name: tr("Errands").into(), color: [0xdb, 0x40, 0x35], account: Some(920), remote_id: Some("6Jf8VQXxpwv56VQ7".into()), ..Default::default() });
         }
+        if shot.is_some() && testaid::get().maps_google {
+            data.prefs.map_provider = crate::model::MapProvider::Google;
+        }
+        // Google's spots are let go after 30 days, as its terms ask
+        data.expire_places(today);
+        if shot.is_none() {
+            crate::maps::google::load_key(data.prefs.plaintext_secrets);
+        }
         // where the person left off, or the views they picked to start on
         let p = &data.prefs;
         let resume = p.start_last_view && shot.is_none();

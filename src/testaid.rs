@@ -87,6 +87,9 @@ pub struct Aids {
     /// `KATLENDAR_PICK[=<words>]`: the first place field drawn opens its
     /// picker, searching those words if there are any *(picture)*
     pub pick: Option<String>,
+    /// `KATLENDAR_MAPS=google`: places come from Google Maps, with no key
+    /// saved yet *(picture)*
+    pub maps_google: bool,
     /// `KATLENDAR_REPEAT=<field>`: that repeat field (crep, erep, rep)
     /// repeats every 2 weeks on Mo and We, 10 times
     pub repeat: Option<String>,
@@ -136,6 +139,7 @@ fn read(var: impl Fn(&str) -> Option<String>) -> Aids {
         repeat: set("REPEAT"),
         geo: set("GEO").and_then(|v| crate::model::parse_geo_uri(&format!("geo:{v}"))),
         pick: set("PICK"),
+        maps_google: set("MAPS").is_some_and(|v| v.eq_ignore_ascii_case("google")),
         morph: set("MORPH").and_then(|v| v.trim().parse::<f32>().ok()).map(|t| t.clamp(0.0, 1.0)),
         drag: set("DRAG").and_then(|v| {
             let (title, at) = v.rsplit_once('@')?;

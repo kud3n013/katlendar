@@ -124,7 +124,24 @@ terms can tie these together, so katlendar should pick them as a bundle.
   - Stored coordinates from a Google search need a refresh rule, or store only the place id and
     the text.
 
-  **Read the terms before building phase 5.**
+  **As built in phase 5.** The Service Specific Terms page still would not load, so the code
+  follows the rules above, which match Google's caching guidance in the Places API docs:
+  - The place id is kept for good (`Place::google_id`); "Open in Google Maps" uses it as
+    `query_place_id`.
+  - A spot from Google is marked with the day it was had (`Place::geo_from_google`) and dropped
+    after 30 days (`Place::expire`, run at start-up). The words and the place id stay.
+  - A spot from Google is never written to a calendar server (`Place::shared_geo`), so only spots
+    put down by hand or found through OpenStreetMap leave the app.
+  - With Google as provider, the map under a place is Google's too (Map Tiles API, 2D roadmap),
+    kept in memory only, never in the disk cache. "Google Maps" and the viewport's copyright are
+    shown bottom right. The Google logo image is not drawn yet: the text stands in for it.
+  - A search and the Place Details call for the place picked share one session token, then a
+    new one is made. Details ask only `id,formattedAddress,location,viewport` (Essentials).
+  - The address at a spot dropped by hand comes from the Geocoding API.
+  - The key is read from the keyring at start-up and added to a request only as it is sent.
+  - Not yet checked against a live key: the Details `viewport` field names and the Map Tiles
+    viewport `copyright` reply. Both are read defensively and fall back to no extent and no
+    copyright line.
 
 ### Recommendation
 

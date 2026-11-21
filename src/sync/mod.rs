@@ -194,7 +194,7 @@ fn save(p: &mut dyn Provider, cal: &RemoteCalendar, e: &Event, stamp: NaiveDateT
         f.all_day = e.all_day;
         f.description = e.notes.clone();
         f.location = crate::model::place_text(&e.place).trim().to_string();
-        f.geo = e.place.as_ref().and_then(|p| p.geo);
+        f.geo = e.place.as_ref().and_then(|p| p.shared_geo());
     };
     let done = |res: Result<Option<String>, SyncError>, uid: String, href: String| match res {
         Ok(etag) => PushResult::Saved { sent: e.clone(), uid, href, etag },
@@ -236,7 +236,7 @@ fn save(p: &mut dyn Provider, cal: &RemoteCalendar, e: &Event, stamp: NaiveDateT
 
 fn save_task(p: &mut dyn Provider, cal: &RemoteCalendar, t: &Task, stamp: NaiveDateTime) -> PushResult {
     use crate::ics::{write_todo, TaskFields};
-    let (location, geo) = (crate::model::place_text(&t.place).trim().to_string(), t.place.as_ref().and_then(|p| p.geo));
+    let (location, geo) = (crate::model::place_text(&t.place).trim().to_string(), t.place.as_ref().and_then(|p| p.shared_geo()));
     let f = TaskFields { title: t.title.clone(), notes: t.notes.clone(), location, geo, due: t.due, priority: t.priority, done: t.done };
     let done = |res: Result<Option<String>, SyncError>, uid: String, href: String| match res {
         Ok(etag) => PushResult::TaskSaved { sent: t.clone(), uid, href, etag },

@@ -208,6 +208,15 @@ impl Data {
             }
         }
     }
+    /// Lets go of the spots from Google kept as long as Google allows.
+    /// Whether any went.
+    pub fn expire_places(&mut self, today: NaiveDate) -> bool {
+        let mut any = false;
+        for p in self.events.iter_mut().filter_map(|e| e.place.as_mut()).chain(self.tasks.iter_mut().filter_map(|t| t.place.as_mut())) {
+            any |= p.expire(today);
+        }
+        any
+    }
     /// Older data files kept the place as a first line "Where: …" in the
     /// notes. Moves it to the place of its own.
     pub fn migrate_places(&mut self) {
@@ -339,7 +348,7 @@ impl Data {
             e.end = f.end;
             e.all_day = f.all_day;
             e.notes = f.notes;
-            e.place = f.place;
+            e.place = super::place::from_server(e.place.take(), f.place);
             e.uid = Some(f.uid);
             e.recurrence_id = f.recurrence_id;
             e.href = f.href;
@@ -416,7 +425,7 @@ impl Data {
             t.title = f.title;
             t.notes = f.notes;
             if let Some(place) = f.place {
-                t.place = place;
+                t.place = super::place::from_server(t.place.take(), place);
             }
             t.due = f.due;
             t.priority = f.priority;

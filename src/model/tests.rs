@@ -919,7 +919,7 @@ fn old_where_lines_become_places() {
     d.event_mut(71).unwrap().place.as_mut().unwrap().geo = Some((48.85, 2.35));
     let json = serde_json::to_string(&d).unwrap();
     let again = Data::from_json(&json).unwrap();
-    assert_eq!(again.event(71).unwrap().place, Some(Place { text: "Corner café".into(), geo: Some((48.85, 2.35)) }));
+    assert_eq!(again.event(71).unwrap().place, Some(Place { text: "Corner café".into(), geo: Some((48.85, 2.35)), ..Default::default() }));
     assert!(!json.contains("\"geo\":null"), "no place, no spot: nothing is written");
 }
 

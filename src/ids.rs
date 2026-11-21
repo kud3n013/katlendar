@@ -96,6 +96,8 @@ fixed! {
 keyed! {
     /// where the map of an editor's place was left: "event" or "task"
     place_map = "placemap";
+    /// the Maps settings' API key field, and how keeping the key went
+    maps_key = "mapskey";
     /// the place picker opened from an editor's Location row
     place_picker = "placepicker";
     /// a day in the quick-nav strip

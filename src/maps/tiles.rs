@@ -1,8 +1,9 @@
-//! Map tiles from OpenStreetMap. A tile is fetched on a worker thread
-//! the first time it is shown, kept on disk for as long as the server
-//! says (a week when it says nothing, as its tile policy asks), and kept
-//! in memory as a texture while it is being looked at. Nothing is
-//! fetched before it is needed on screen.
+//! Map tiles from OpenStreetMap or Google. A tile is fetched on a worker
+//! thread the first time it is shown, and kept in memory as a texture
+//! while it is being looked at. One from OpenStreetMap is also kept on
+//! disk for as long as the server says (a week when it says nothing, as
+//! its tile policy asks); one from Google never is, as Google's terms
+//! ask. Nothing is fetched before it is needed on screen.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,15 +12,27 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use super::USER_AGENT;
+use super::{google, Source, USER_AGENT};
 
 /// The side of a tile, in pixels.
 pub const TILE: f64 = 256.0;
-/// The closest zoom the tile server draws.
-pub const MAX_ZOOM: u8 = 19;
-/// Who to thank, under every map, and where that is explained.
+/// Who to thank, under every map from OpenStreetMap, and where that is explained.
 pub const ATTRIBUTION: &str = "© OpenStreetMap contributors";
 pub const COPYRIGHT: &str = "https://www.openstreetmap.org/copyright";
+/// What Google asks to be shown under its maps, before the data's copyright.
+pub const GOOGLE_ATTRIBUTION: &str = "Google Maps";
+pub const GOOGLE_TERMS: &str = "https://www.google.com/intl/en/help/terms_maps/";
+const GOOGLE_TILES: &str = "https://tile.googleapis.com";
+
+impl Source {
+    /// The closest zoom the tile server draws.
+    pub fn max_zoom(self) -> u8 {
+        match self {
+            Source::Osm => 19,
+            Source::Google => 21,
+        }
+    }
+}
 
 /// Textures kept in memory; the ones looked at longest ago go first.
 const IN_MEMORY: usize = 256;
@@ -34,6 +47,7 @@ const RETRY: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TileId {
+    pub src: Source,
     pub z: u8,
     pub x: u32,
     pub y: u32,
@@ -42,10 +56,10 @@ pub struct TileId {
 impl TileId {
     /// The tile one zoom out that covers this one.
     pub fn parent(self) -> Option<TileId> {
-        (self.z > 0).then(|| TileId { z: self.z - 1, x: self.x / 2, y: self.y / 2 })
+        (self.z > 0).then(|| TileId { src: self.src, z: self.z - 1, x: self.x / 2, y: self.y / 2 })
     }
     fn valid(self) -> bool {
-        self.z <= MAX_ZOOM && self.x < 1 << self.z && self.y < 1 << self.z
+        self.z <= self.src.max_zoom() && self.x < 1 << self.z && self.y < 1 << self.z
     }
     fn url(self) -> String {
         format!("https://tile.openstreetmap.org/{}/{}/{}.png", self.z, self.x, self.y)
@@ -65,12 +79,29 @@ enum Slot {
     Failed(Instant),
 }
 
+/// The part of the world a map shows, for Google's copyright: a zoom
+/// and the tiles at its corners, west, north, east, south.
+pub type Area = (u8, [u32; 4]);
+
 #[derive(Default)]
 struct State {
     slots: HashMap<TileId, Slot>,
     /// the last one in is fetched first: it is the one just asked for
     queue: Vec<TileId>,
     started: bool,
+    /// the copyright of Google's map data in the area last shown, and
+    /// the area it was asked for
+    credit: Option<(Area, Option<String>)>,
+    /// the area whose copyright is to be asked next
+    credit_wanted: Option<Area>,
+}
+
+/// Google's tile session: the key it was made with, its token, and when
+/// it runs out (seconds since 1970).
+struct Session {
+    key: String,
+    token: String,
+    expiry: i64,
 }
 
 pub struct Tiles {
@@ -78,18 +109,22 @@ pub struct Tiles {
     wake: Condvar,
     ctx: egui::Context,
     dir: PathBuf,
+    session: Mutex<Option<Session>>,
 }
 
 static TILES: OnceLock<Arc<Tiles>> = OnceLock::new();
 
 /// The app's one set of tiles.
 pub fn tiles(ctx: &egui::Context) -> Arc<Tiles> {
-    TILES.get_or_init(|| Arc::new(Tiles { state: Mutex::default(), wake: Condvar::new(), ctx: ctx.clone(), dir: cache_dir() })).clone()
+    TILES.get_or_init(|| Arc::new(Tiles { state: Mutex::default(), wake: Condvar::new(), ctx: ctx.clone(), dir: cache_dir(), session: Mutex::new(None) })).clone()
 }
 
 /// Whether a tile is on its way; a picture of the app waits for it.
 pub fn busy() -> bool {
-    TILES.get().is_some_and(|t| t.lock().slots.values().any(|s| matches!(s, Slot::Waiting)))
+    TILES.get().is_some_and(|t| {
+        let s = t.lock();
+        s.credit_wanted.is_some() || s.slots.values().any(|s| matches!(s, Slot::Waiting))
+    })
 }
 
 /// Beside the app's data: `…/katlendar/tiles`.
@@ -120,6 +155,12 @@ impl Tiles {
             let old = s.queue.remove(0);
             s.slots.remove(&old);
         }
+        self.start(s);
+        None
+    }
+
+    /// Starts the workers the first time, and wakes one.
+    fn start(self: &Arc<Self>, mut s: MutexGuard<'_, State>) {
         // tests ask for tiles without fetching them
         let start = !std::mem::replace(&mut s.started, true) && !cfg!(test);
         drop(s);
@@ -130,7 +171,19 @@ impl Tiles {
             }
         }
         self.wake.notify_one();
-        None
+    }
+
+    /// The copyright of Google's map data in `area`: the one last known
+    /// while the new one is asked for.
+    pub fn credit(self: &Arc<Self>, area: Area) -> Option<String> {
+        let mut s = self.lock();
+        let known = s.credit.as_ref().and_then(|c| c.1.clone());
+        if s.credit.as_ref().is_some_and(|c| c.0 == area) || s.credit_wanted == Some(area) {
+            return known;
+        }
+        s.credit_wanted = Some(area);
+        self.start(s);
+        known
     }
 
     /// The tile's texture when it is here, without asking for it.
@@ -152,16 +205,37 @@ impl Tiles {
             .build()
             .into();
         loop {
-            let id = {
+            let job = {
                 let mut s = self.lock();
                 loop {
                     if let Some(id) = s.queue.pop() {
-                        break id;
+                        break Ok(id);
+                    }
+                    // the copyright once the tiles are here
+                    if let Some(area) = s.credit_wanted.take() {
+                        break Err(area);
                     }
                     s = self.wake.wait(s).unwrap_or_else(|e| e.into_inner());
                 }
             };
-            let slot = match fetch(&agent, id, &self.dir) {
+            let id = match job {
+                Ok(id) => id,
+                Err(area) => {
+                    let c = self.copyright(&agent, area);
+                    let mut s = self.lock();
+                    // a failure keeps what was known, and is asked again for another area
+                    let known = s.credit.as_ref().and_then(|c| c.1.clone());
+                    s.credit = Some((area, c.or(known)));
+                    drop(s);
+                    self.ctx.request_repaint();
+                    continue;
+                }
+            };
+            let got = match id.src {
+                Source::Osm => fetch(&agent, id, &self.dir),
+                Source::Google => self.fetch_google(&agent, id),
+            };
+            let slot = match got {
                 Some(img) => {
                     let name = format!("tile {}/{}/{}", id.z, id.x, id.y);
                     Slot::Ready(self.ctx.load_texture(name, img, egui::TextureOptions::LINEAR), self.ctx.cumulative_frame_nr())
@@ -174,6 +248,67 @@ impl Tiles {
             drop(s);
             self.ctx.request_repaint();
         }
+    }
+}
+
+impl Tiles {
+    /// Google's tile session, made when there is none, it has run out,
+    /// or the key has changed.
+    fn google_session(&self, agent: &ureq::Agent) -> Option<(String, String)> {
+        let key = google::key()?;
+        let mut s = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        let now = chrono::Utc::now().timestamp();
+        if let Some(x) = s.as_ref().filter(|x| x.key == key && x.expiry > now + 60) {
+            return Some((key, x.token.clone()));
+        }
+        let mut resp = agent
+            .post(&format!("{GOOGLE_TILES}/v1/createSession?key={}", crate::sync::oauth::url_encode(&key)))
+            .header("Content-Type", "application/json")
+            .send(google::session_request().to_string())
+            .ok()?;
+        let ok = resp.status().is_success();
+        let body = resp.body_mut().read_to_string().ok()?;
+        if !ok {
+            eprintln!("katlendar: no Google map session: {}", google::error_of(&body).unwrap_or(body));
+            return None;
+        }
+        let (token, expiry) = google::parse_session(&body).ok()?;
+        // with no expiry given, a day is assumed
+        let expiry = if expiry > 0 { expiry } else { now + 24 * 3600 };
+        *s = Some(Session { key: key.clone(), token: token.clone(), expiry });
+        Some((key, token))
+    }
+
+    /// A tile from Google, kept in memory only.
+    fn fetch_google(&self, agent: &ureq::Agent, id: TileId) -> Option<egui::ColorImage> {
+        let (key, token) = self.google_session(agent)?;
+        let url = format!("{GOOGLE_TILES}/v1/2dtiles/{}/{}/{}?session={}&key={}", id.z, id.x, id.y, token, crate::sync::oauth::url_encode(&key));
+        let mut resp = agent.get(&url).call().ok()?;
+        match resp.status().as_u16() {
+            200 => decode(&resp.body_mut().with_config().limit(4 << 20).read_to_vec().ok()?),
+            // the session is no longer good: the next tile makes a new one
+            401 | 403 => {
+                *self.session.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// The copyright of Google's map data in `area`.
+    fn copyright(&self, agent: &ureq::Agent, (z, [w, n, e, s]): Area) -> Option<String> {
+        let (key, token) = self.google_session(agent)?;
+        let edge = |x: u32, y: u32| super::widget::spot(x as f64 * TILE, y as f64 * TILE, z as f64);
+        let (north, west) = edge(w, n);
+        let (south, east) = edge(e + 1, s + 1);
+        let url = format!(
+            "{GOOGLE_TILES}/tile/v1/viewport?session={token}&key={}&zoom={z}&north={north:.6}&south={south:.6}&east={east:.6}&west={west:.6}",
+            crate::sync::oauth::url_encode(&key)
+        );
+        let mut resp = agent.get(&url).call().ok()?;
+        let ok = resp.status().is_success();
+        let body = resp.body_mut().read_to_string().ok()?;
+        ok.then(|| google::parse_copyright(&body)).flatten()
     }
 }
 
@@ -310,13 +445,16 @@ mod tests {
 
     #[test]
     fn tiles_have_a_place() {
-        let t = TileId { z: 3, x: 5, y: 2 };
+        let t = TileId { src: Source::Osm, z: 3, x: 5, y: 2 };
         assert_eq!(t.url(), "https://tile.openstreetmap.org/3/5/2.png");
         assert_eq!(t.path(Path::new("/c")), Path::new("/c/osm/3/5/2.png"));
-        assert_eq!(t.parent(), Some(TileId { z: 2, x: 2, y: 1 }));
-        assert_eq!(TileId { z: 0, x: 0, y: 0 }.parent(), None);
-        assert!(!TileId { z: 3, x: 8, y: 0 }.valid());
-        assert!(!TileId { z: 20, x: 0, y: 0 }.valid());
+        assert_eq!(t.parent(), Some(TileId { src: Source::Osm, z: 2, x: 2, y: 1 }));
+        assert_eq!(TileId { src: Source::Osm, z: 0, x: 0, y: 0 }.parent(), None);
+        assert!(!TileId { src: Source::Osm, z: 3, x: 8, y: 0 }.valid());
+        assert!(!TileId { src: Source::Osm, z: 20, x: 0, y: 0 }.valid());
+        // Google draws closer
+        assert!(TileId { src: Source::Google, z: 20, x: 0, y: 0 }.valid());
+        assert!(!TileId { src: Source::Google, z: 22, x: 0, y: 0 }.valid());
         assert!(USER_AGENT.starts_with("katlendar/") && USER_AGENT.contains("github.com"));
     }
 }

@@ -111,7 +111,7 @@ fn place_of(loc: &Value) -> Option<Place> {
 /// coordinates are left out, which clears those the server had.
 fn location_json(p: &Option<Place>) -> Value {
     let mut v = json!({ "displayName": place_text(p) });
-    if let Some((lat, lon)) = p.as_ref().and_then(|p| p.geo) {
+    if let Some((lat, lon)) = p.as_ref().and_then(|p| p.shared_geo()) {
         v["coordinates"] = json!({ "latitude": lat, "longitude": lon });
     }
     v
@@ -120,7 +120,7 @@ fn location_json(p: &Option<Place>) -> Value {
 /// What the server holds is the place of `e`: the same name and spot.
 fn same_place(loc: &Value, e: &Event) -> bool {
     let theirs = place_of(loc);
-    place_text(&theirs) == place_text(&e.place).trim() && same_geo(theirs.and_then(|p| p.geo), e.place.as_ref().and_then(|p| p.geo))
+    place_text(&theirs) == place_text(&e.place).trim() && same_geo(theirs.and_then(|p| p.geo), e.place.as_ref().and_then(|p| p.shared_geo()))
 }
 
 /// An event as the JSON Graph takes. The notes travel only when asked:
