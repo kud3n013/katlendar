@@ -136,6 +136,7 @@ impl eframe::App for App {
                 "tags" => Page::Tags,
                 "appearance" => Page::Appearance,
                 "info" => Page::Info,
+                "maps" => Page::Maps,
                 _ => Page::General,
             };
             if let Some(q) = &aid.settings_query {

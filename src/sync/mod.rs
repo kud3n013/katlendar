@@ -175,18 +175,6 @@ pub enum PushResult {
     Failed { error: SyncError },
 }
 
-/// An event's notes as the two fields a server keeps: the place, written
-/// here as a first line "Where: …", and the description.
-pub fn place_and_notes(notes: &str) -> (String, String) {
-    match notes.strip_prefix("Where: ") {
-        Some(rest) => match rest.split_once('\n') {
-            Some((place, more)) => (place.trim().to_string(), more.to_string()),
-            None => (rest.trim().to_string(), String::new()),
-        },
-        None => (String::new(), notes.to_string()),
-    }
-}
-
 /// A name for a new event that no other event has.
 pub(crate) fn new_uid() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -199,14 +187,14 @@ pub(crate) fn new_uid() -> String {
 
 fn save(p: &mut dyn Provider, cal: &RemoteCalendar, e: &Event, stamp: NaiveDateTime) -> PushResult {
     use crate::ics::{read_event, write_event, EventFields};
-    let (location, description) = place_and_notes(&e.notes);
     let fill = |f: &mut EventFields| {
         f.summary = e.title.clone();
         f.start = e.start;
         f.end = e.end;
         f.all_day = e.all_day;
-        f.description = description.clone();
-        f.location = location.clone();
+        f.description = e.notes.clone();
+        f.location = crate::model::place_text(&e.place).trim().to_string();
+        f.geo = e.place.as_ref().and_then(|p| p.geo);
     };
     let done = |res: Result<Option<String>, SyncError>, uid: String, href: String| match res {
         Ok(etag) => PushResult::Saved { sent: e.clone(), uid, href, etag },
@@ -248,7 +236,8 @@ fn save(p: &mut dyn Provider, cal: &RemoteCalendar, e: &Event, stamp: NaiveDateT
 
 fn save_task(p: &mut dyn Provider, cal: &RemoteCalendar, t: &Task, stamp: NaiveDateTime) -> PushResult {
     use crate::ics::{write_todo, TaskFields};
-    let f = TaskFields { title: t.title.clone(), notes: t.notes.clone(), due: t.due, priority: t.priority, done: t.done };
+    let (location, geo) = (crate::model::place_text(&t.place).trim().to_string(), t.place.as_ref().and_then(|p| p.geo));
+    let f = TaskFields { title: t.title.clone(), notes: t.notes.clone(), location, geo, due: t.due, priority: t.priority, done: t.done };
     let done = |res: Result<Option<String>, SyncError>, uid: String, href: String| match res {
         Ok(etag) => PushResult::TaskSaved { sent: t.clone(), uid, href, etag },
         Err(SyncError::Conflict | SyncError::Gone) => PushResult::TaskConflict { task: t.id },
@@ -327,10 +316,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn notes_split_into_place_and_description() {
-        assert_eq!(place_and_notes("Where: Room 4\nBring notes\nand pens"), ("Room 4".into(), "Bring notes\nand pens".into()));
-        assert_eq!(place_and_notes("Where: Room 4"), ("Room 4".into(), String::new()));
-        assert_eq!(place_and_notes("Just notes"), (String::new(), "Just notes".into()));
+    fn new_uids_differ() {
         assert_ne!(new_uid(), new_uid());
     }
 }

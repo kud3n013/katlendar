@@ -163,10 +163,10 @@ impl EventEdit {
         let e = &self.ev;
         let mine = match &self.base {
             Some(b) => !same_json(
-                &(&e.title, &e.notes, &e.side_notes, e.start, e.end, e.all_day, e.calendar, e.color, e.buffer),
-                &(&b.title, &b.notes, &b.side_notes, b.start, b.end, b.all_day, b.calendar, b.color, b.buffer),
+                &(&e.title, &e.notes, &e.place, &e.side_notes, e.start, e.end, e.all_day, e.calendar, e.color, e.buffer),
+                &(&b.title, &b.notes, &b.place, &b.side_notes, b.start, b.end, b.all_day, b.calendar, b.color, b.buffer),
             ),
-            None => !e.title.trim().is_empty() || !e.notes.trim().is_empty(),
+            None => !e.title.trim().is_empty() || !e.notes.trim().is_empty() || e.place.is_some(),
         };
         mine || self.repeat != Repeat::None || self.task.as_ref().is_some_and(|t| t.changed())
     }
@@ -190,8 +190,8 @@ impl TaskEdit {
         let (t, b) = (&self.task, &self.base);
         let date = |d: Option<NaiveDate>| d.map(|d| d.to_string()).unwrap_or_default();
         !same_json(
-            &(&t.title, &t.notes, t.done, t.priority, t.duration_min, t.list, &t.repeat, &t.repeat_end, t.flexible, t.color),
-            &(&b.title, &b.notes, b.done, b.priority, b.duration_min, b.list, &b.repeat, &b.repeat_end, b.flexible, b.color),
+            &(&t.title, &t.notes, &t.place, t.done, t.priority, t.duration_min, t.list, &t.repeat, &t.repeat_end, t.flexible, t.color),
+            &(&b.title, &b.notes, &b.place, b.done, b.priority, b.duration_min, b.list, &b.repeat, &b.repeat_end, b.flexible, b.color),
         ) || self.due_text.trim() != date(b.due)
             || self.earliest_text.trim() != date(b.earliest)
             || self.tags_text.split_whitespace().ne(b.tags.iter().map(String::as_str))
@@ -886,11 +886,12 @@ impl App {
         }
     }
 
-    /// An event as its editor shows it: a block carries its task's name and note.
+    /// An event as its editor shows it: a block carries its task's name,
+    /// note and place.
     pub fn shown_event(&self, id: u64) -> Option<Event> {
         let mut ev = self.data.event(id)?.clone();
         if let Some(t) = ev.task_id.and_then(|t| self.data.task(t)) {
-            (ev.title, ev.notes) = (t.title.clone(), t.notes.clone());
+            (ev.title, ev.notes, ev.place) = (t.title.clone(), t.notes.clone(), t.place.clone());
         }
         Some(ev)
     }
@@ -988,6 +989,7 @@ impl App {
             all_day: false,
             calendar: cal,
             notes: t.notes.clone(),
+            place: t.place.clone(),
             task_id: Some(task_id),
             color: None,
             ..Default::default()

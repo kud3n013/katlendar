@@ -417,6 +417,7 @@ fn feed_event(uid: &str, rid: Option<&str>, title: &str, h: u32) -> crate::ics::
         recurrence_id: rid.map(|s| s.to_string()),
         href: None,
         etag: None,
+        place: None,
     }
 }
 
@@ -896,6 +897,47 @@ fn a_synced_lists_title_starts_with_its_service() {
     assert_eq!(d.list_title(3), "Mine");
     // the name itself is kept as it was, for the editor and the server
     assert_eq!(d.list_look(1).0, "Inbox");
+}
+
+#[test]
+fn old_where_lines_become_places() {
+    let mut d = empty();
+    d.tasks.push(Task { id: 70, title: "Write".into(), notes: "Where: Library\nChapter two".into(), ..Default::default() });
+    d.events.push(Event { id: 71, title: "Lunch".into(), notes: "Where: Corner café\r\nBring the list".into(), ..Default::default() });
+    d.events.push(Event { id: 72, title: "Call".into(), notes: "Say where: at home".into(), ..Default::default() });
+    // a place already set is left alone, notes and all
+    d.events.push(Event { id: 73, notes: "Where: Old".into(), place: Place::named("New"), ..Default::default() });
+    let d = Data::from_json(&serde_json::to_string(&d).unwrap()).unwrap();
+    let t = d.task(70).unwrap();
+    assert_eq!((t.place.clone(), t.notes.as_str()), (Place::named("Library"), "Chapter two"));
+    let e = d.event(71).unwrap();
+    assert_eq!((e.place.clone(), e.notes.as_str()), (Place::named("Corner café"), "Bring the list"));
+    assert_eq!((d.event(72).unwrap().place.clone(), d.event(72).unwrap().notes.as_str()), (None, "Say where: at home"));
+    assert_eq!((d.event(73).unwrap().place.clone(), d.event(73).unwrap().notes.as_str()), (Place::named("New"), "Where: Old"));
+    // saved and read again, it stays put, with its spot on the map
+    let mut d = d;
+    d.event_mut(71).unwrap().place.as_mut().unwrap().geo = Some((48.85, 2.35));
+    let json = serde_json::to_string(&d).unwrap();
+    let again = Data::from_json(&json).unwrap();
+    assert_eq!(again.event(71).unwrap().place, Some(Place { text: "Corner café".into(), geo: Some((48.85, 2.35)) }));
+    assert!(!json.contains("\"geo\":null"), "no place, no spot: nothing is written");
+}
+
+#[test]
+fn a_service_without_places_keeps_the_one_here() {
+    let mut d = empty();
+    d.lists.push(TaskList { id: 60, ..Default::default() });
+    d.tasks.push(Task { id: 61, list: 60, title: "Old".into(), place: Place::named("Gym"), uid: Some("t".into()), href: Some("/t".into()), ..Default::default() });
+    d.events.push(Event { id: 62, task_id: Some(61), title: "Old".into(), place: Place::named("Gym"), ..Default::default() });
+    // Todoist sends no place
+    let task = crate::ics::FeedTask { uid: "t".into(), title: "New".into(), href: Some("/t".into()), place: None, ..Default::default() };
+    d.apply_tasks(60, crate::sync::Delta { tasks: vec![task.clone()], ..Default::default() });
+    assert_eq!(d.task(61).unwrap().place, Place::named("Gym"));
+    assert_eq!(d.event(62).unwrap().place, Place::named("Gym"), "its block too");
+    // a server that keeps places and has none clears it
+    d.apply_tasks(60, crate::sync::Delta { tasks: vec![crate::ics::FeedTask { place: Some(None), ..task }], ..Default::default() });
+    assert_eq!(d.task(61).unwrap().place, None);
+    assert_eq!(d.event(62).unwrap().place, None);
 }
 
 #[test]

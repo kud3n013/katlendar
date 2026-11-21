@@ -22,6 +22,7 @@ pub enum Page {
     Planner,
     Frames,
     QuickAdd,
+    Maps,
     Info,
 }
 
@@ -29,7 +30,7 @@ const CONTROL_W: f32 = 390.0;
 const ROW_H: f32 = 56.0;
 
 /// The order pages are listed in search results.
-const SEARCH_ORDER: [(Page, &str); 11] = [
+const SEARCH_ORDER: [(Page, &str); 12] = [
     (Page::General, later("General")),
     (Page::Appearance, later("Appearance")),
     (Page::ActiveCalendars, later("Active calendars")),
@@ -39,6 +40,7 @@ const SEARCH_ORDER: [(Page, &str); 11] = [
     (Page::Frames, later("Frames")),
     (Page::QuickAdd, later("Quick add")),
     (Page::Calendars, later("Calendars")),
+    (Page::Maps, later("Maps")),
     (Page::Info, later("Info")),
     (Page::Shortcuts, later("Shortcuts")),
 ];
@@ -311,7 +313,7 @@ impl App {
                 let searching = !self.settings_query.trim().is_empty();
                 for (group, pages) in [
                     (tr("Explore"), vec![(Page::Shortcuts, icons::KEYBOARD, tr("Shortcuts"))]),
-                    (tr("Integrations"), vec![(Page::Calendars, icons::CALENDAR, tr("Calendars"))]),
+                    (tr("Integrations"), vec![(Page::Calendars, icons::CALENDAR, tr("Calendars")), (Page::Maps, icons::MAP, tr("Maps"))]),
                     (
                         tr("Preferences"),
                         vec![
@@ -376,6 +378,7 @@ impl App {
                         Page::Lists => self.page_lists(ui),
                 Page::Tags => self.page_tags(ui),
                         Page::Calendars => self.page_calendars(ui, &ctx),
+                        Page::Maps => self.page_maps(ui),
                         Page::Shortcuts => self.page_shortcuts(ui),
                         Page::Info => self.page_info(ui),
                     }
@@ -404,6 +407,7 @@ impl App {
                 Page::Lists => self.page_lists(ui),
                 Page::Tags => self.page_tags(ui),
                 Page::Calendars => self.page_calendars(ui, ctx),
+                Page::Maps => self.page_maps(ui),
                 Page::Shortcuts => self.page_shortcuts(ui),
                 Page::Info => self.page_info(ui),
             });
@@ -419,6 +423,15 @@ impl App {
             self.settings_page = page;
             self.settings_query.clear();
         }
+    }
+
+    fn page_maps(&mut self, ui: &mut egui::Ui) {
+        heading(ui, tr("Maps"));
+        let p = &mut self.data.prefs;
+        row(ui, tr("Open places in"), tr("The map the button beside a place opens it on: Google Maps, Apple Maps, OpenStreetMap or the map app."), |ui| {
+            let opts: Vec<(OpenIn, String)> = OpenIn::all().into_iter().map(|o| (o, o.name().to_string())).collect();
+            combo(ui, "op", &mut p.open_places_in, &opts);
+        });
     }
 
     fn page_general(&mut self, ui: &mut egui::Ui) {

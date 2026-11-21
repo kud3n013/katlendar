@@ -7,7 +7,7 @@ use crate::strings::{tr, trf};
 use super::oauth::{url_encode, OAuthApp};
 use super::{Delta, Provider, PushResult, RemoteCalendar, SyncError};
 use crate::ics::{self, FeedEvent};
-use crate::model::{Event, RemoteKey};
+use crate::model::{place_text, same_geo, Event, Place, RemoteKey};
 use chrono::{Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use serde_json::{json, Value};
 
@@ -73,14 +73,7 @@ fn event_of(v: &Value) -> Option<FeedEvent> {
     let (s, e) = (parse_time(&v["start"])?, parse_time(&v["end"])?);
     // whole days are dates, the same everywhere
     let (start, end) = if all_day { (s, e.max(s + Duration::days(1))) } else { (to_local(s), to_local(e).max(to_local(s) + Duration::minutes(15))) };
-    let place = v["location"]["displayName"].as_str().unwrap_or("").trim();
-    let text = v["body"]["content"].as_str().unwrap_or("").replace("\r\n", "\n");
-    let text = text.trim();
-    let notes = match (place.is_empty(), text.is_empty()) {
-        (true, _) => text.to_string(),
-        (false, true) => format!("Where: {place}"),
-        (false, false) => format!("Where: {place}\n{text}"),
-    };
+    let notes = v["body"]["content"].as_str().unwrap_or("").replace("\r\n", "\n").trim().to_string();
     // one day of a repeating event; those cannot be changed here yet
     let repeats = matches!(v["type"].as_str(), Some("occurrence" | "exception" | "seriesMaster")) || v["seriesMasterId"].is_string();
     Some(FeedEvent {
@@ -89,6 +82,7 @@ fn event_of(v: &Value) -> Option<FeedEvent> {
         end,
         all_day,
         notes,
+        place: place_of(&v["location"]),
         uid: id.clone(),
         recurrence_id: repeats.then(|| s.format("%Y%m%dT%H%M%SZ").to_string()),
         href: Some(id),
@@ -96,10 +90,43 @@ fn event_of(v: &Value) -> Option<FeedEvent> {
     })
 }
 
+/// The place of an event out of Graph's location. Without a name, its
+/// address stands in.
+fn place_of(loc: &Value) -> Option<Place> {
+    let mut text = loc["displayName"].as_str().unwrap_or("").trim().to_string();
+    if text.is_empty() {
+        let a = &loc["address"];
+        let parts: Vec<&str> = ["street", "city", "state", "postalCode", "countryOrRegion"].iter().filter_map(|k| a[*k].as_str()).map(str::trim).filter(|s| !s.is_empty()).collect();
+        text = parts.join(", ");
+    }
+    let c = &loc["coordinates"];
+    let geo = match (c["latitude"].as_f64(), c["longitude"].as_f64()) {
+        (Some(lat), Some(lon)) if (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon) => Some((lat, lon)),
+        _ => None,
+    };
+    Place::of(&text, geo)
+}
+
+/// An event's place as Graph's location. With no spot on the map the
+/// coordinates are left out, which clears those the server had.
+fn location_json(p: &Option<Place>) -> Value {
+    let mut v = json!({ "displayName": place_text(p) });
+    if let Some((lat, lon)) = p.as_ref().and_then(|p| p.geo) {
+        v["coordinates"] = json!({ "latitude": lat, "longitude": lon });
+    }
+    v
+}
+
+/// What the server holds is the place of `e`: the same name and spot.
+fn same_place(loc: &Value, e: &Event) -> bool {
+    let theirs = place_of(loc);
+    place_text(&theirs) == place_text(&e.place).trim() && same_geo(theirs.and_then(|p| p.geo), e.place.as_ref().and_then(|p| p.geo))
+}
+
 /// An event as the JSON Graph takes. The notes travel only when asked:
 /// writing them replaces a formatted text on the server with a plain one.
-fn json_of(e: &Event, with_notes: bool) -> Value {
-    let (place, text) = super::place_and_notes(&e.notes);
+/// So does the place: writing it replaces the address the server keeps.
+fn json_of(e: &Event, with_notes: bool, with_place: bool) -> Value {
     let stamp = |t: NaiveDateTime| {
         let t = if e.all_day { t.date().and_hms_opt(0, 0, 0).unwrap_or(t) } else { to_utc(t) };
         json!({ "dateTime": t.format("%Y-%m-%dT%H:%M:%S").to_string(), "timeZone": "UTC" })
@@ -109,10 +136,12 @@ fn json_of(e: &Event, with_notes: bool) -> Value {
         "start": stamp(e.start),
         "end": stamp(e.end),
         "isAllDay": e.all_day,
-        "location": { "displayName": place },
     });
+    if with_place {
+        v["location"] = location_json(&e.place);
+    }
     if with_notes {
-        v["body"] = json!({ "contentType": "text", "content": text });
+        v["body"] = json!({ "contentType": "text", "content": e.notes });
     }
     v
 }
@@ -254,17 +283,18 @@ impl Provider for Graph {
             Err(error) => PushResult::Failed { error },
         };
         Some(match &e.href {
-            None => done(self.call("POST", &format!("{}/me/calendars/{}/events", self.base, url_encode(&cal.id)), Some(&json_of(e, true)), None)),
+            None => done(self.call("POST", &format!("{}/me/calendars/{}/events", self.base, url_encode(&cal.id)), Some(&json_of(e, true, true)), None)),
             Some(id) => {
                 let url = format!("{}/me/events/{}", self.base, url_encode(id));
-                // the notes are only sent when they were changed here
-                let theirs = match self.call("GET", &format!("{url}?$select=id,body"), None, None) {
-                    Ok(r) => r.body["body"]["content"].as_str().unwrap_or("").replace("\r\n", "\n").trim().to_string(),
+                // the notes and place are only sent when they were changed here
+                let theirs = match self.call("GET", &format!("{url}?$select=id,body,location"), None, None) {
+                    Ok(r) => r.body,
                     Err(SyncError::Gone) => return Some(PushResult::Conflict { event: e.id }),
                     Err(error) => return Some(PushResult::Failed { error }),
                 };
-                let ours = super::place_and_notes(&e.notes).1;
-                done(self.call("PATCH", &url, Some(&json_of(e, ours.trim() != theirs)), e.etag.as_deref()))
+                let their_notes = theirs["body"]["content"].as_str().unwrap_or("").replace("\r\n", "\n");
+                let body = json_of(e, e.notes.trim() != their_notes.trim(), !same_place(&theirs["location"], e));
+                done(self.call("PATCH", &url, Some(&body), e.etag.as_deref()))
             }
         })
     }
@@ -314,7 +344,8 @@ mod tests {
         )
         .unwrap();
         let e = event_of(&v).unwrap();
-        assert_eq!((e.title.as_str(), e.notes.as_str(), e.uid.as_str(), e.href.as_deref(), e.etag.as_deref()), ("Review", "Where: Room 4\nBring notes", "A1", Some("A1"), Some("W/\"x\"")));
+        assert_eq!((e.title.as_str(), e.notes.as_str(), e.uid.as_str(), e.href.as_deref(), e.etag.as_deref()), ("Review", "Bring notes", "A1", Some("A1"), Some("W/\"x\"")));
+        assert_eq!(e.place, Place::named("Room 4"));
         assert_eq!(e.start, to_local(NaiveDate::from_ymd_opt(2026, 11, 16).unwrap().and_hms_opt(15, 0, 0).unwrap()));
         assert!(e.recurrence_id.is_none());
 
@@ -330,10 +361,34 @@ mod tests {
         assert!(event_of(&serde_json::json!({"id":"C","isCancelled":true})).is_none());
 
         // and back: what is written reads the same
-        let ev = Event { title: "Review".into(), start: to_local(parse_time(&json!({"dateTime":"2026-11-16T15:00:00"})).unwrap()), end: to_local(parse_time(&json!({"dateTime":"2026-11-16T16:00:00"})).unwrap()), notes: "Where: Room 4\nBring notes".into(), ..Default::default() };
-        let j = json_of(&ev, true);
+        let ev = Event { title: "Review".into(), start: to_local(parse_time(&json!({"dateTime":"2026-11-16T15:00:00"})).unwrap()), end: to_local(parse_time(&json!({"dateTime":"2026-11-16T16:00:00"})).unwrap()), notes: "Bring notes".into(), place: Place::named("Room 4"), ..Default::default() };
+        let j = json_of(&ev, true, true);
         assert_eq!((j["start"]["dateTime"].as_str(), j["start"]["timeZone"].as_str(), j["location"]["displayName"].as_str(), j["body"]["content"].as_str()), (Some("2026-11-16T15:00:00"), Some("UTC"), Some("Room 4"), Some("Bring notes")));
-        assert!(json_of(&ev, false).get("body").is_none());
+        assert!(json_of(&ev, false, true).get("body").is_none());
+        assert!(json_of(&ev, true, false).get("location").is_none());
+    }
+
+    #[test]
+    fn places_from_and_to_json() {
+        // a room with a spot
+        let loc = json!({"displayName":"Town hall","coordinates":{"latitude":48.2,"longitude":16.37}});
+        assert_eq!(place_of(&loc), Place::of("Town hall", Some((48.2, 16.37))));
+        // no name: the address stands in; coordinates out of range are none
+        let loc = json!({"displayName":"","address":{"street":"1 Main St","city":"Springfield","postalCode":"","countryOrRegion":"US"},"coordinates":{"latitude":200.0,"longitude":0.0}});
+        assert_eq!(place_of(&loc), Place::named("1 Main St, Springfield, US"));
+        assert_eq!(place_of(&json!({"displayName":""})), None);
+        assert_eq!(place_of(&Value::Null), None);
+
+        let ev = Event { place: Place::of("Town hall ", Some((48.2, 16.37))), ..Default::default() };
+        let j = location_json(&ev.place);
+        assert_eq!((j["displayName"].as_str(), j["coordinates"]["latitude"].as_f64(), j["coordinates"]["longitude"].as_f64()), (Some("Town hall"), Some(48.2), Some(16.37)));
+        assert!(location_json(&Place::named("X")).get("coordinates").is_none());
+        // what the server has is the same place, even with its address
+        let theirs = json!({"displayName":"Town hall","address":{"city":"Vienna"},"coordinates":{"latitude":48.2000001,"longitude":16.37}});
+        assert!(same_place(&theirs, &ev));
+        assert!(!same_place(&json!({"displayName":"Town hall"}), &ev), "the spot is new");
+        assert!(!same_place(&theirs, &Event { place: Place::named("Town hall"), ..Default::default() }), "the spot went");
+        assert!(same_place(&json!({"displayName":""}), &Event::default()));
     }
 
     #[test]

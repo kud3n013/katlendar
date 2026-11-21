@@ -191,7 +191,7 @@ fn push_results_are_taken_in() {
     assert!(!app.data.event(500).unwrap().dirty, "the server's copy may now come in");
     assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("Conflict")));
     // the server's copy then replaces the original
-    let mut f = ics::FeedEvent { title: "Server's".into(), start: App::now(), end: App::now(), all_day: false, notes: String::new(), uid: "u1".into(), recurrence_id: None, href: Some("https://x.example/dav/c/u1.ics".into()), etag: Some("\"2\"".into()) };
+    let mut f = ics::FeedEvent { title: "Server's".into(), start: App::now(), end: App::now(), all_day: false, notes: String::new(), uid: "u1".into(), recurrence_id: None, href: Some("https://x.example/dav/c/u1.ics".into()), etag: Some("\"2\"".into()), place: None };
     app.data.apply_delta(901, vec![f.clone()], &[]);
     assert_eq!(app.data.event(500).unwrap().title, "Server's");
     // but an edit not yet sent is not written over by a pull

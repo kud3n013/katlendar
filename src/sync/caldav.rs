@@ -587,13 +587,15 @@ mod tests {
         let stamp = now;
         let at = |h: u32| NaiveDate::from_ymd_opt(2026, 11, 17).unwrap().and_hms_opt(h, 0, 0).unwrap();
         // a new event
-        let mine = Event { id: 5, title: "Mine; with, signs".into(), start: at(9), end: at(10), notes: "Where: Room 4\nBring notes".into(), ..Default::default() };
+        let mine = Event { id: 5, title: "Mine; with, signs".into(), start: at(9), end: at(10), notes: "Bring notes".into(), place: crate::model::Place::of("Room 4", Some((52.52, 13.405))), ..Default::default() };
         let r = push(&mut dav, &cal, &[PushJob::Save(mine.clone())], stamp);
         let PushResult::Saved { uid, href, etag, .. } = r[0].clone() else { panic!("not saved: {r:?}") };
         assert!(href.starts_with(&cal_url) && etag.is_some());
         let (raw, _) = dav.get(&href).expect("get");
         let (uid2, f) = ics::read_event(&raw).unwrap();
         assert_eq!((uid2, f.summary.as_str(), f.location.as_str(), f.description.as_str(), f.start), (uid.clone(), "Mine; with, signs", "Room 4", "Bring notes", at(9)));
+        assert_eq!(f.geo, Some((52.52, 13.405)));
+        assert!(raw.contains("GEO:52.52;13.405") && raw.contains("X-APPLE-STRUCTURED-LOCATION"), "{raw}");
         // creating it again must not overwrite: the address is taken
         assert_eq!(dav.put(&cal, &href, &raw, &Guard::New).unwrap_err(), SyncError::Conflict);
 

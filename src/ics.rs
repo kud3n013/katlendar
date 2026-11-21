@@ -1,5 +1,6 @@
 //! Subscribed calendars: fetching a calendar feed (.ics) and reading it.
 
+use crate::model::{geo_number, parse_geo, parse_geo_uri, same_geo, Place};
 use crate::strings::{tr, trf};
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Utc, Weekday};
 use std::collections::HashSet;
@@ -12,6 +13,7 @@ pub struct FeedEvent {
     pub end: NaiveDateTime,
     pub all_day: bool,
     pub notes: String,
+    pub place: Option<Place>,
     /// the event's UID; never empty
     pub uid: String,
     /// names one occurrence of a repeating event: its original start, in
@@ -98,6 +100,7 @@ struct Raw {
     summary: String,
     description: String,
     location: String,
+    geo: Geo,
     start: Option<(When, bool)>,
     end: Option<(When, bool)>,
     duration: Option<Duration>,
@@ -105,6 +108,33 @@ struct Raw {
     exdates: Vec<When>,
     recurrence_id: Option<When>,
     cancelled: bool,
+}
+
+/// The spot on a map an event gives, from the lines that can hold it.
+#[derive(Default, Clone)]
+struct Geo {
+    /// GEO:lat;lon, the standard one
+    geo: Option<(f64, f64)>,
+    /// X-APPLE-STRUCTURED-LOCATION, a geo: link, as Apple writes it
+    apple: Option<(f64, f64)>,
+    /// COORDINATES, a geo: link, from a newer draft
+    coordinates: Option<(f64, f64)>,
+}
+
+impl Geo {
+    /// Reads one line; false when it holds no spot.
+    fn read(&mut self, key: &str, value: &str) -> bool {
+        match key {
+            "GEO" => self.geo = self.geo.or(parse_geo(value)),
+            "X-APPLE-STRUCTURED-LOCATION" => self.apple = self.apple.or(parse_geo_uri(value)),
+            "COORDINATES" => self.coordinates = self.coordinates.or(parse_geo_uri(value)),
+            _ => return false,
+        }
+        true
+    }
+    fn get(&self) -> Option<(f64, f64)> {
+        self.geo.or(self.apple).or(self.coordinates)
+    }
 }
 
 /// A moment as written in the feed: wall time plus the zone it is in.
@@ -494,6 +524,7 @@ pub fn parse(text: &str, now: NaiveDateTime) -> Result<Feed, String> {
             "SUMMARY" => r.summary = unescape(value),
             "DESCRIPTION" => r.description = unescape(value),
             "LOCATION" => r.location = unescape(value),
+            k if r.geo.read(k, value) => {}
             "DTSTART" => r.start = parse_when(value, &params),
             "DTEND" => r.end = parse_when(value, &params),
             "DURATION" => r.duration = parse_duration(value),
@@ -521,10 +552,8 @@ pub fn parse(text: &str, now: NaiveDateTime) -> Result<Feed, String> {
             (None, None) => Duration::zero(),
         };
         let len = if all_day { len.max(Duration::days(1)) } else { len.max(Duration::minutes(15)) };
-        let mut notes = r.description.trim().to_string();
-        if !r.location.trim().is_empty() {
-            notes = if notes.is_empty() { format!("Where: {}", r.location.trim()) } else { format!("Where: {}\n{}", r.location.trim(), notes) };
-        }
+        let notes = r.description.trim().to_string();
+        let place = Place::of(&r.location, r.geo.get());
         let title = if r.summary.trim().is_empty() { "Busy".to_string() } else { r.summary.trim().to_string() };
         // a feed that leaves the UID out still needs a steady name
         let uid = if r.uid.is_empty() { format!("no-uid:{}:{}", start.key(all_day), title) } else { r.uid.clone() };
@@ -559,6 +588,7 @@ pub fn parse(text: &str, now: NaiveDateTime) -> Result<Feed, String> {
                 end: e,
                 all_day,
                 notes: notes.clone(),
+                place: place.clone(),
                 uid: uid.clone(),
                 recurrence_id,
                 href: None,
@@ -580,6 +610,8 @@ pub struct EventFields {
     pub all_day: bool,
     pub description: String,
     pub location: String,
+    /// latitude and longitude of the location, when known
+    pub geo: Option<(f64, f64)>,
     pub rrule: Option<String>,
 }
 
@@ -677,12 +709,52 @@ fn own_lines(lines: &[String]) -> Vec<(usize, &String)> {
         .collect()
 }
 
+/// Text fit for a quoted parameter value, which can hold no quotes and
+/// no line breaks.
+fn param_text(v: &str) -> String {
+    v.trim().replace('"', "'").replace(['\r', '\n'], " ")
+}
+
+/// Apple's line for a place on the map, which Apple Calendar and iOS
+/// read to show it.
+fn apple_location(text: &str, (lat, lon): (f64, f64)) -> String {
+    format!("X-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-TITLE=\"{}\":geo:{},{}", param_text(text), geo_number(lat), geo_number(lon))
+}
+
+/// The lines that hold a place, each with its new line; None leaves it
+/// out. Without a spot on the map, the spot lines a server had go: they
+/// belonged to the place before.
+fn place_lines(location: &str, geo: Option<(f64, f64)>) -> Vec<(&'static str, Option<String>)> {
+    vec![
+        ("LOCATION", (!location.trim().is_empty()).then(|| format!("LOCATION:{}", escape(location)))),
+        ("GEO", geo.map(|(lat, lon)| format!("GEO:{};{}", geo_number(lat), geo_number(lon)))),
+        ("X-APPLE-STRUCTURED-LOCATION", geo.map(|g| apple_location(location, g))),
+        // read, never written: kept only while it still says the same
+        ("COORDINATES", None),
+    ]
+}
+
+/// A place line of [`place_lines`] already says what it should.
+fn same_place_line(key: &str, params: &[(String, String)], value: &str, location: &str, geo: Option<(f64, f64)>) -> bool {
+    match key {
+        "LOCATION" => unescape(value) == location,
+        "GEO" => same_geo(parse_geo(value), geo),
+        "COORDINATES" => same_geo(parse_geo_uri(value), geo),
+        // Apple's line also names the place
+        _ => {
+            let title = params.iter().find(|(k, _)| k == "X-TITLE").map(|(_, v)| v.as_str()).unwrap_or("");
+            same_geo(parse_geo_uri(value), geo) && title.trim() == param_text(location)
+        }
+    }
+}
+
 /// Reads the changeable parts and the UID of an event as a server sent it.
 pub fn read_event(raw: &str) -> Option<(String, EventFields)> {
     let lines = unfold(raw);
     let (b, e) = main_event(&lines)?;
     let mut f = EventFields::default();
     let (mut uid, mut start, mut end, mut dur) = (String::new(), None, None, None);
+    let mut geo = Geo::default();
     for (depth, line) in own_lines(&lines[b + 1..e]) {
         let Some((key, params, value)) = split_line(line) else { continue };
         if depth > 0 {
@@ -693,6 +765,7 @@ pub fn read_event(raw: &str) -> Option<(String, EventFields)> {
             "SUMMARY" => f.summary = unescape(value),
             "DESCRIPTION" => f.description = unescape(value),
             "LOCATION" => f.location = unescape(value),
+            k if geo.read(k, value) => {}
             "RRULE" => f.rrule = Some(value.trim().to_string()),
             "DTSTART" => start = parse_when(value, &params),
             "DTEND" => end = parse_when(value, &params),
@@ -701,6 +774,7 @@ pub fn read_event(raw: &str) -> Option<(String, EventFields)> {
         }
     }
     let (start, all_day) = start?;
+    f.geo = geo.get();
     f.all_day = all_day;
     f.start = start.local();
     f.end = match (end, dur) {
@@ -715,7 +789,9 @@ pub fn read_event(raw: &str) -> Option<(String, EventFields)> {
 /// Writes an event for a server. With `raw`, the event as the server sent
 /// it, only the title, times, notes, place and repeat rule are changed,
 /// and only where they differ: alarms, guests and everything this program
-/// does not know stay as they were. `stamp` is the time now, in UTC.
+/// does not know stay as they were. A place with no spot on the map drops
+/// the spot the server had, which belonged to the place before.
+/// `stamp` is the time now, in UTC.
 pub fn write_event(raw: Option<&str>, uid: &str, f: &EventFields, stamp: NaiveDateTime) -> String {
     let fresh = || -> Vec<String> {
         ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//katlendar//EN", "BEGIN:VEVENT", &format!("UID:{uid}"), "END:VEVENT", "END:VCALENDAR"]
@@ -776,9 +852,11 @@ pub fn write_event(raw: Option<&str>, uid: &str, f: &EventFields, stamp: NaiveDa
         ("DTEND", (!keep_duration).then(|| when("DTEND", f.end))),
         ("SUMMARY", text("SUMMARY", &f.summary)),
         ("DESCRIPTION", text("DESCRIPTION", &f.description)),
-        ("LOCATION", text("LOCATION", &f.location)),
         ("RRULE", f.rrule.as_ref().filter(|r| !r.trim().is_empty()).map(|r| format!("RRULE:{}", r.trim()))),
-    ];
+    ]
+    .into_iter()
+    .chain(place_lines(&f.location, f.geo))
+    .collect();
     let stamp_text = stamp.format("%Y%m%dT%H%M%SZ").to_string();
 
     let mut out: Vec<String> = lines[..=b].to_vec();
@@ -799,7 +877,7 @@ pub fn write_event(raw: Option<&str>, uid: &str, f: &EventFields, stamp: NaiveDa
                 "RRULE" => f.rrule.as_deref().map(str::trim) == Some(value.trim()),
                 "SUMMARY" => unescape(value) == f.summary,
                 "DESCRIPTION" => unescape(value) == f.description,
-                _ => unescape(value) == f.location,
+                _ => same_place_line(&key, &params, value, &f.location, f.geo),
             };
             if same {
                 out.push(line.clone());
@@ -844,6 +922,8 @@ pub struct FeedTask {
     pub uid: String,
     pub title: String,
     pub notes: String,
+    /// None when the service keeps no place: the one here stays
+    pub place: Option<Option<Place>>,
     pub due: Option<NaiveDate>,
     /// as iCalendar counts it: 0 none, 1 highest, 9 lowest
     pub priority: u8,
@@ -872,6 +952,7 @@ pub fn parse_todos(text: &str) -> Vec<FeedTask> {
     while let Some((b, e)) = main_part(rest, "VTODO") {
         let mut t = FeedTask::default();
         let (mut repeats, mut cancelled, mut completed) = (false, false, false);
+        let (mut location, mut geo) = (String::new(), Geo::default());
         for (depth, line) in own_lines(&rest[b + 1..e]) {
             let Some((key, params, value)) = split_line(line) else { continue };
             if depth > 0 {
@@ -881,6 +962,8 @@ pub fn parse_todos(text: &str) -> Vec<FeedTask> {
                 "UID" => t.uid = value.trim().to_string(),
                 "SUMMARY" => t.title = unescape(value).trim().to_string(),
                 "DESCRIPTION" => t.notes = unescape(value).trim().to_string(),
+                "LOCATION" => location = unescape(value),
+                k if geo.read(k, value) => {}
                 "DUE" => t.due = parse_when(value, &params).map(|(w, all_day)| if all_day { w.wall.date() } else { w.local().date() }),
                 "PRIORITY" => t.priority = value.trim().parse::<u8>().unwrap_or(0).min(9),
                 "STATUS" => {
@@ -893,6 +976,7 @@ pub fn parse_todos(text: &str) -> Vec<FeedTask> {
             }
         }
         t.done |= completed;
+        t.place = Some(Place::of(&location, geo.get()));
         if !repeats && !cancelled && !t.uid.is_empty() {
             if t.title.is_empty() {
                 t.title = "Task".into();
@@ -909,13 +993,15 @@ pub fn parse_todos(text: &str) -> Vec<FeedTask> {
 pub struct TaskFields {
     pub title: String,
     pub notes: String,
+    pub location: String,
+    pub geo: Option<(f64, f64)>,
     pub due: Option<NaiveDate>,
     pub priority: u8,
     pub done: bool,
 }
 
 /// Writes a task for a server. With `raw`, the task as the server sent
-/// it, only the title, notes, due date, priority and done state are
+/// it, only the title, notes, place, due date, priority and done state are
 /// changed, and only where they differ; the rest stays as it was.
 /// `stamp` is the time now, in UTC.
 pub fn write_todo(raw: Option<&str>, uid: &str, f: &TaskFields, stamp: NaiveDateTime) -> String {
@@ -943,7 +1029,10 @@ pub fn write_todo(raw: Option<&str>, uid: &str, f: &TaskFields, stamp: NaiveDate
         ("STATUS", Some(format!("STATUS:{}", if f.done { "COMPLETED" } else { "NEEDS-ACTION" }))),
         ("COMPLETED", f.done.then(|| format!("COMPLETED:{stamp_text}"))),
         ("PERCENT-COMPLETE", f.done.then(|| "PERCENT-COMPLETE:100".to_string())),
-    ];
+    ]
+    .into_iter()
+    .chain(place_lines(&f.location, f.geo))
+    .collect();
     let mut out: Vec<String> = lines[..=b].to_vec();
     let mut seen: HashSet<String> = HashSet::new();
     for (depth, line) in own_lines(&lines[b + 1..e]) {
@@ -966,7 +1055,8 @@ pub fn write_todo(raw: Option<&str>, uid: &str, f: &TaskFields, stamp: NaiveDate
                 "STATUS" => v.eq_ignore_ascii_case("COMPLETED") == f.done && !v.eq_ignore_ascii_case("CANCELLED"),
                 // when it was ticked off stays; a task in progress keeps its share done
                 "COMPLETED" => f.done,
-                _ => f.done == (v == "100"),
+                "PERCENT-COMPLETE" => f.done == (v == "100"),
+                _ => same_place_line(&key, &params, value, &f.location, f.geo),
             };
             if same {
                 out.push(line.clone());
@@ -1041,7 +1131,8 @@ mod tests {
         assert_eq!(f.events[0].title, "Lunch, long title");
         assert_eq!(f.events[0].start, at(2026, 11, 14, 12, 0));
         assert_eq!(f.events[0].end, at(2026, 11, 14, 13, 0));
-        assert_eq!(f.events[0].notes, "Where: Cafe");
+        assert_eq!(f.events[0].notes, "");
+        assert_eq!(f.events[0].place, Place::named("Cafe"));
         assert!(f.events[1].all_day);
         assert_eq!(f.events[1].end, at(2026, 11, 23, 0, 0));
     }
@@ -1251,7 +1342,7 @@ mod tests {
     fn writes_tasks_back() {
         let one = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:t1\r\nDTSTAMP:20260101T000000Z\r\nSUMMARY:Buy milk\\, bread\r\nDESCRIPTION:Two of each\r\nDUE:20261120T120000Z\r\nPRIORITY:1\r\nPERCENT-COMPLETE:40\r\nCATEGORIES:home\r\nX-APPLE-SORT-ORDER:7\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:Reminder\r\nTRIGGER:-PT1H\r\nEND:VALARM\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
         let read = parse_todos(one).remove(0);
-        let mut f = TaskFields { title: read.title, notes: read.notes, due: read.due, priority: read.priority, done: read.done };
+        let mut f = TaskFields { title: read.title, notes: read.notes, due: read.due, priority: read.priority, done: read.done, ..Default::default() };
         // unchanged: everything stays, the due time and the share done included
         let same = unfold(&write_todo(Some(one), "t1", &f, stamp()));
         for l in unfold(one) {
@@ -1292,5 +1383,77 @@ mod tests {
     #[test]
     fn not_a_calendar() {
         assert!(parse("<html>hello</html>", now()).is_err());
+    }
+
+    #[test]
+    fn reads_a_spot_on_the_map() {
+        let one = |lines: &str| parse(&wrap(&format!("BEGIN:VEVENT\r\nUID:1\r\nSUMMARY:X\r\nDTSTART:20261114T120000\r\n{lines}END:VEVENT\r\n")), now()).unwrap().events.remove(0).place;
+        assert_eq!(one("LOCATION:Cafe\r\nGEO:52.52;13.405\r\n"), Place::of("Cafe", Some((52.52, 13.405))));
+        // Apple's line alone, folded as Apple writes it
+        assert_eq!(
+            one("LOCATION:Apple Park\r\nX-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-APPLE-RADIUS=70;X-TITLE=\"Apple Park\":geo:37.3349,-122.0\r\n 0902\r\n"),
+            Place::of("Apple Park", Some((37.3349, -122.00902)))
+        );
+        // GEO wins over the others
+        assert_eq!(one("GEO:1;2\r\nX-APPLE-STRUCTURED-LOCATION;VALUE=URI:geo:3,4\r\nCOORDINATES:geo:5,6\r\n"), Place::of("", Some((1.0, 2.0))));
+        assert_eq!(one("COORDINATES:geo:5,6\r\n"), Place::of("", Some((5.0, 6.0))));
+        // a spot out of range is no spot
+        assert_eq!(one("LOCATION:Nowhere\r\nGEO:100;0\r\n"), Place::named("Nowhere"));
+        assert_eq!(one(""), None);
+    }
+
+    #[test]
+    fn writes_a_spot_on_the_map() {
+        let f = EventFields { summary: "Lunch".into(), start: at(2026, 11, 14, 12, 0), end: at(2026, 11, 14, 13, 0), location: "Café \"Zum Ochsen\", Berlin".into(), geo: Some((52.52, 13.405)), ..Default::default() };
+        let text = write_event(None, "p1", &f, stamp());
+        let lines = unfold(&text);
+        assert!(lines.contains(&"LOCATION:Café \"Zum Ochsen\"\\, Berlin".to_string()), "{text}");
+        assert!(lines.contains(&"GEO:52.52;13.405".to_string()), "{text}");
+        assert!(lines.contains(&"X-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-TITLE=\"Café 'Zum Ochsen', Berlin\":geo:52.52,13.405".to_string()), "{text}");
+        // and read back the same
+        assert_eq!(read_event(&text).unwrap().1, f);
+        let feed = parse(&text, now()).unwrap();
+        assert_eq!(feed.events[0].place, Place::of("Café \"Zum Ochsen\", Berlin", Some((52.52, 13.405))));
+    }
+
+    #[test]
+    fn a_new_place_drops_the_old_spot() {
+        let theirs = wrap("BEGIN:VEVENT\r\nUID:s\r\nDTSTAMP:20260101T000000Z\r\nSUMMARY:Meet\r\nDTSTART:20261114T120000\r\nDTEND:20261114T130000\r\nLOCATION:Apple Park\r\nGEO:37.3349;-122.0090\r\nX-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-APPLE-RADIUS=70;X-ADDRESS=\"1 Apple Park Way\";X-TITLE=\"Apple Park\":geo:37.3349,-122.009\r\nCOORDINATES:geo:37.3349,-122.009\r\nEND:VEVENT\r\n");
+        let (_, mut f) = read_event(&theirs).unwrap();
+        // unchanged: Apple's own line stays with all its parameters
+        let same = unfold(&write_event(Some(&theirs), "s", &f, stamp())).join("\n");
+        assert!(same.contains("X-APPLE-RADIUS=70;X-ADDRESS=\"1 Apple Park Way\""), "{same}");
+        assert!(same.contains("COORDINATES:geo:37.3349,-122.009") && same.contains("GEO:37.3349;-122.0090"), "{same}");
+        // a new spot: the lines say the new one, the old address goes
+        f.geo = Some((37.33, -122.03));
+        let moved = unfold(&write_event(Some(&theirs), "s", &f, stamp())).join("\n");
+        assert!(moved.contains("GEO:37.33;-122.03") && !moved.contains("X-ADDRESS") && !moved.contains("COORDINATES"), "{moved}");
+        // a new name with no spot: every spot goes
+        f.location = "Cafe".into();
+        f.geo = None;
+        let text = write_event(Some(&theirs), "s", &f, stamp());
+        assert!(text.contains("LOCATION:Cafe"), "{text}");
+        for gone in ["GEO", "X-APPLE-STRUCTURED-LOCATION", "COORDINATES", "37.3349"] {
+            assert!(!text.contains(gone), "kept {gone}: {text}");
+        }
+        assert_eq!(parse(&text, now()).unwrap().events[0].place, Place::named("Cafe"));
+        // no place at all
+        f.location.clear();
+        assert!(!write_event(Some(&theirs), "s", &f, stamp()).contains("LOCATION"));
+    }
+
+    #[test]
+    fn tasks_keep_a_place() {
+        let f = TaskFields { title: "Pick up parcel".into(), location: "Post office".into(), geo: Some((51.5, -0.12)), ..Default::default() };
+        let text = write_todo(None, "t9", &f, stamp());
+        let t = parse_todos(&text).remove(0);
+        assert_eq!(t.place, Some(Place::of("Post office", Some((51.5, -0.12)))));
+        // the place moved and lost its spot
+        let g = TaskFields { location: "Home".into(), geo: None, ..f };
+        let again = write_todo(Some(&text), "t9", &g, stamp());
+        assert!(!again.contains("GEO") && !again.contains("X-APPLE-STRUCTURED-LOCATION"), "{again}");
+        assert_eq!(parse_todos(&again).remove(0).place, Some(Place::named("Home")));
+        // a task with no place says so: the one here is cleared
+        assert_eq!(parse_todos(&write_todo(None, "t0", &TaskFields { title: "x".into(), ..Default::default() }, stamp())).remove(0).place, Some(None));
     }
 }

@@ -88,6 +88,8 @@ fn task_of(v: &Value) -> Option<FeedTask> {
         uid: id.clone(),
         title: v["content"].as_str().unwrap_or("").to_string(),
         notes: v["description"].as_str().unwrap_or("").to_string(),
+        // Todoist keeps no place: the one here stays
+        place: None,
         due: due_day(&v["due"]),
         priority: priority_in(v["priority"].as_i64().unwrap_or(1)),
         done: v["checked"].as_bool().unwrap_or(false),

@@ -482,24 +482,33 @@ pub(crate) fn swatches(ui: &mut egui::Ui, base: [u8; 3], base_tip: &str, color: 
     });
 }
 
-/// An event's notes as the place on their first line ("Where: …") and the
-/// rest, both as typed: nothing is trimmed, so a space being typed stays.
-fn split_place(notes: &str) -> (String, String) {
-    match notes.strip_prefix("Where: ") {
-        Some(rest) => match rest.split_once('\n') {
-            Some((place, more)) => (place.to_string(), more.to_string()),
-            None => (rest.to_string(), String::new()),
-        },
-        None => (String::new(), notes.to_string()),
-    }
+/// The place of an event or task, as one line of text. Typing a new
+/// text forgets the spot on the map the old one had.
+/// Beside it, a button that shows the place on the map `open` names.
+fn place_field(ui: &mut egui::Ui, place: &mut Option<Place>, open: OpenIn) {
+    ui.horizontal(|ui| {
+        // a window that can't be changed has its own, enabled one
+        let link = place.as_ref().filter(|_| ui.is_enabled()).and_then(|p| open.link(p));
+        let button_w = if link.is_some() { ui.spacing().interact_size.y + ui.spacing().item_spacing.x } else { 0.0 };
+        let mut text = place_text(place).to_string();
+        let w = (ui.available_width() - button_w).max(80.0);
+        if ui.add(egui::TextEdit::singleline(&mut text).hint_text(tr("Add a place")).desired_width(w)).changed() {
+            set_place_text(place, &text);
+        }
+        if let Some(url) = link {
+            open_place_button(ui, &url, open, false);
+        }
+    });
 }
 
-/// The other way from [`split_place`]: no place leaves the notes as they are.
-fn join_place(place: &str, notes: &str) -> String {
-    match (place.is_empty(), notes.is_empty()) {
-        (true, _) => notes.to_string(),
-        (false, true) => format!("Where: {place}"),
-        (false, false) => format!("Where: {place}\n{notes}"),
+/// Opens a place's link in the browser or map app: a pin alone, or a
+/// pin and "Open in …" for a window where the place can't be edited.
+fn open_place_button(ui: &mut egui::Ui, url: &str, open: OpenIn, words: bool) {
+    let what = trf("Open in {}", &[&open.name()]);
+    let label = if words { format!("{}  {what}", icons::MAP_PIN) } else { icons::MAP_PIN.to_string() };
+    let b = ui.button(label).on_hover_text(if words { url.to_string() } else { what });
+    if b.clicked() {
+        crate::platform::open_url(url);
     }
 }
 
@@ -1426,6 +1435,9 @@ impl App {
         if now.notes != base.notes {
             ed.ev.notes = now.notes.clone();
         }
+        if now.place != base.place {
+            ed.ev.place = now.place.clone();
+        }
         if now.calendar != base.calendar {
             ed.ev.calendar = now.calendar;
         }
@@ -1446,6 +1458,7 @@ impl App {
         let muted = self.pal.muted;
         // a read-only event: only Skip and the side notes can change
         let locked = if ed.is_new { None } else { self.data.locked(&ed.ev) };
+        let open = self.data.prefs.open_places_in;
         if let Some(why) = locked {
             ui.label(RichText::new(why).size(theme::size::TINY).color(muted));
             ui.add_space(2.0);
@@ -1456,9 +1469,7 @@ impl App {
         if locked.is_some() {
             (to_title, to_notes) = (false, ed.focus);
         }
-        // the place is the first line of the notes ("Where: …"), as servers
-        // get it; a task's block has no place of its own
-        let (mut place, mut rest) = if is_task { (String::new(), ed.ev.notes.clone()) } else { split_place(&ed.ev.notes) };
+        let mut notes = ed.ev.notes.clone();
         ui.add_enabled_ui(locked.is_none(), |ui| {
             save |= editor_title(ui, &mut ed.ev.title, if is_task { tr("New Task") } else { tr("New Event") }, &mut to_title);
             let was_all_day = ed.ev.all_day;
@@ -1565,8 +1576,9 @@ impl App {
                     editor_label(ui, tr("Colour"), muted);
                     color_row(ui, self.data.calendar_color(ed.ev.calendar), &mut ed.ev.color);
                     ui.end_row();
+                    // a task's block has its task's place, in the task's fields
                     editor_label(ui, tr("Location"), muted);
-                    ui.add(egui::TextEdit::singleline(&mut place).hint_text(tr("Add a place")).desired_width(f32::INFINITY));
+                    place_field(ui, &mut ed.ev.place, open);
                     ui.end_row();
                     let day = ed.ev.start.date();
                     let label = |ui: &mut egui::Ui, t: &str| editor_label(ui, t, muted);
@@ -1582,6 +1594,13 @@ impl App {
             self.task_fields(ui, t);
         }
         });
+        // the place of an event that can't be changed can still be looked up
+        if locked.is_some() && !is_task {
+            if let Some(url) = ed.ev.place.as_ref().and_then(|p| open.link(p)) {
+                ui.add_space(4.0);
+                open_place_button(ui, &url, open, true);
+            }
+        }
         if !is_task && !ed.ev.all_day {
             // buffers are this app's own, so a read-only event may have them too
             editor_grid(ui, "ebufgrid", |ui| {
@@ -1591,8 +1610,8 @@ impl App {
             });
         }
         if locked.is_none() {
-            save |= editor_notes(ui, &mut rest, tr("Notes"), &mut to_notes);
-            ed.ev.notes = if is_task { rest } else { join_place(&place, &rest) };
+            save |= editor_notes(ui, &mut notes, tr("Notes"), &mut to_notes);
+            ed.ev.notes = notes;
         } else if !ed.ev.notes.trim().is_empty() {
             // its own notes, to read and copy from
             ui.add_space(4.0);
@@ -1779,7 +1798,7 @@ impl App {
         macro_rules! take {
             ($($f:ident),*) => { $( if now.$f != b.$f { t.$f = now.$f.clone(); } )* };
         }
-        take!(title, notes, done, priority, duration_min, list, repeat, flexible, color);
+        take!(title, notes, place, done, priority, duration_min, list, repeat, flexible, color);
         if now.due != b.due {
             ed.due_text = now.due.map(|d| d.to_string()).unwrap_or_default();
         }
@@ -1838,6 +1857,9 @@ impl App {
                     ui.selectable_value(&mut ed.task.duration_min, v, dur(v));
                 }
             });
+            ui.end_row();
+            editor_label(ui, tr("Location"), muted);
+            place_field(ui, &mut ed.task.place, self.data.prefs.open_places_in);
             ui.end_row();
             let day = ed.task.due.unwrap_or_else(|| chrono::Local::now().date_naive());
             let label = |ui: &mut egui::Ui, t: &str| editor_label(ui, t, muted);
@@ -2087,14 +2109,16 @@ mod tests {
     }
 
     #[test]
-    fn the_place_is_the_first_line_of_the_notes() {
-        assert_eq!(split_place("Where: Room 4 \nBring notes"), ("Room 4 ".into(), "Bring notes".into()));
-        assert_eq!(split_place("Bring notes"), (String::new(), "Bring notes".into()));
-        for notes in ["Where: Room 4\nBring notes", "Where: Room 4", "Bring notes", ""] {
-            let (place, rest) = split_place(notes);
-            assert_eq!(join_place(&place, &rest), notes);
-        }
-        assert_eq!(join_place("", "Bring notes"), "Bring notes");
+    fn typing_a_place_keeps_spaces_and_drops_the_old_spot() {
+        let mut p = Some(Place { text: "Room 4".into(), geo: Some((52.5, 13.4)) });
+        // a space being typed stays, and the spot with it
+        set_place_text(&mut p, "Room 4 ");
+        assert_eq!(p, Some(Place { text: "Room 4 ".into(), geo: Some((52.5, 13.4)) }));
+        // another place: the spot belonged to the old one
+        set_place_text(&mut p, "Room 5");
+        assert_eq!(p, Some(Place { text: "Room 5".into(), geo: None }));
+        set_place_text(&mut p, "  ");
+        assert_eq!(p, None);
     }
 
     #[test]
