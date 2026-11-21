@@ -339,7 +339,7 @@ pub(crate) fn buffer_pick(ui: &mut egui::Ui, salt: impl std::hash::Hash + std::f
 }
 
 /// A buffer's length as shown: "None", "15 min" or "2 h".
-fn buffer_len(m: i64) -> String {
+pub(crate) fn buffer_len(m: i64) -> String {
     if m == 0 {
         tr("None").to_string()
     } else if m % 60 == 0 {
@@ -497,8 +497,9 @@ fn place_field(ui: &mut egui::Ui, salt: &str, place: &mut Option<Place>, open: O
         // a window that can't be changed has its own, enabled one
         let link = place.as_ref().filter(|_| ui.is_enabled()).and_then(|p| open.link(p));
         let find = ui.is_enabled();
-        let button = ui.spacing().interact_size.y + ui.spacing().item_spacing.x;
-        let buttons = (find as u8 + link.is_some() as u8) as f32 * button;
+        // the buttons' own widths, so the field leaves them just enough room
+        let gap = ui.spacing().item_spacing.x;
+        let buttons = if find { icon_button_w(ui, icons::MAP_PIN) + gap } else { 0.0 } + if link.is_some() { icon_button_w(ui, icons::EXTERNAL_LINK) + gap } else { 0.0 };
         let mut text = place_text(place).to_string();
         let w = (ui.available_width() - buttons).max(80.0);
         if ui.add(egui::TextEdit::singleline(&mut text).hint_text(tr("Add a place")).desired_width(w)).changed() {
@@ -515,6 +516,21 @@ fn place_field(ui: &mut egui::Ui, salt: &str, place: &mut Option<Place>, open: O
         Some(crate::maps::picker::Closed::Use(p)) => *place = p,
         Some(crate::maps::picker::Closed::Cancel) | None => {}
     }
+}
+
+/// How much wider the widest of `names` is in the language shown than in
+/// English, as a window's muted field names are drawn.
+fn label_growth(ctx: &egui::Context, names: &[&'static str]) -> f32 {
+    let font = egui::TextStyle::Body.resolve(&ctx.global_style());
+    let width = |t: &str| ctx.fonts_mut(|f| f.layout_no_wrap(t.to_string(), font.clone(), egui::Color32::WHITE).size().x);
+    let widest = |shown: &dyn Fn(&'static str) -> &'static str| names.iter().map(|n| width(shown(n))).fold(0.0, f32::max);
+    (widest(&tr) - widest(&|n| n)).max(0.0)
+}
+
+/// How wide a button showing only `icon` is drawn.
+fn icon_button_w(ui: &egui::Ui, icon: &str) -> f32 {
+    let galley = egui::WidgetText::from(icon).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+    galley.size().x + 2.0 * ui.spacing().button_padding.x
 }
 
 /// The map under a place whose spot is known, which can be dragged and
@@ -642,7 +658,10 @@ impl App {
         // each calendar's maps, for the place of the calendar picked
         let cal_maps: std::collections::HashMap<u64, (OpenIn, MapProvider)> = self.data.calendars.iter().map(|c| (c.id, (self.data.open_in_of(c.id), self.data.map_provider_of(c.id)))).collect();
         let look = self.pick_look();
-        let w = 380.0;
+        // a language with longer names for the fields widens the window by
+        // as much, so the fields keep the room they have in English
+        let names = ["Calendar", "Colour", "Time", "Repeat", "Every", "On", "Ends", "List", "Tags", "Due", "Priority", "Location", "Notes"];
+        let w = 380.0 + label_growth(ctx, &names);
         let pos = place_beside(ctx, ids::create_popup(), c.anchor_rect, egui::vec2(w + 20.0, 400.0));
         let cal_color = self.data.calendar_color(c.ev.calendar);
         let today = Local::now().date_naive();
