@@ -84,6 +84,9 @@ pub struct Aids {
     pub update: Option<String>,
     /// `KATLENDAR_GEO=<lat>,<lon>`: every sample place with a text is at that spot *(picture)*
     pub geo: Option<(f64, f64)>,
+    /// `KATLENDAR_PICK[=<words>]`: the first place field drawn opens its
+    /// picker, searching those words if there are any *(picture)*
+    pub pick: Option<String>,
     /// `KATLENDAR_REPEAT=<field>`: that repeat field (crep, erep, rep)
     /// repeats every 2 weeks on Mo and We, 10 times
     pub repeat: Option<String>,
@@ -132,6 +135,7 @@ fn read(var: impl Fn(&str) -> Option<String>) -> Aids {
         update: set("UPDATE"),
         repeat: set("REPEAT"),
         geo: set("GEO").and_then(|v| crate::model::parse_geo_uri(&format!("geo:{v}"))),
+        pick: set("PICK"),
         morph: set("MORPH").and_then(|v| v.trim().parse::<f32>().ok()).map(|t| t.clamp(0.0, 1.0)),
         drag: set("DRAG").and_then(|v| {
             let (title, at) = v.rsplit_once('@')?;

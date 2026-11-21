@@ -16,6 +16,8 @@ const STAND_IN: u8 = 6;
 /// The ground tiles are drawn on, OpenStreetMap's own.
 const LAND: Color32 = Color32::from_rgb(0xf2, 0xef, 0xe9);
 const PIN: Color32 = Color32::from_rgb(0xe5, 0x48, 0x4d);
+/// How far above its point the middle of the pin's head is.
+const PIN_HEAD: f32 = 17.0;
 
 /// What part of the world a map shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,20 +63,79 @@ impl MapView {
     }
 }
 
-#[allow(dead_code)]
 pub struct MapResponse {
-    pub response: egui::Response,
     /// the spot clicked, if the map was
     pub clicked: Option<(f64, f64)>,
+    /// where the pin was put down, after it was dragged
+    pub pin_moved: Option<(f64, f64)>,
 }
 
 /// Draws the map in `size`, with `pin` on it. A drag moves it; scrolling,
 /// a double click and the buttons zoom.
 pub fn show(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size: egui::Vec2) -> MapResponse {
+    draw(ui, view, pin, size, false)
+}
+
+/// A map as [`show`] draws it, whose pin can be picked up and put down
+/// somewhere else.
+pub fn pick(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size: egui::Vec2) -> MapResponse {
+    draw(ui, view, pin, size, true)
+}
+
+/// Where on the screen a spot is, on a map whose middle is at `mid`:
+/// on the copy of the world nearest the middle, once it has wrapped.
+fn on_screen(view: &MapView, mid: Pos2, (lat, lon): (f64, f64)) -> Pos2 {
+    let (px, py) = world(lat, lon, view.zoom);
+    let (cx, cy) = world(view.center.0, view.center.1, view.zoom);
+    let w = TILE * view.zoom.exp2();
+    let dx = px - cx - ((px - cx) / w).round() * w;
+    mid + vec2(dx as f32, (py - cy) as f32)
+}
+
+/// The spot at a point of the screen, the other way from [`on_screen`].
+fn at_point(view: &MapView, mid: Pos2, p: Pos2) -> (f64, f64) {
+    let (x, y) = world(view.center.0, view.center.1, view.zoom);
+    spot(x + (p.x - mid.x) as f64, y + (p.y - mid.y) as f64, view.zoom)
+}
+
+fn draw(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size: egui::Vec2, movable: bool) -> MapResponse {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let mid = rect.center();
     let off = |p: Pos2| ((p.x - mid.x) as f64, (p.y - mid.y) as f64);
-    if resp.dragged() {
+    // a pin being dragged: how far its point is from the pointer
+    let held_id = resp.id.with("pin held");
+    let mut held = ui.data(|d| d.get_temp::<egui::Vec2>(held_id));
+    if movable && resp.drag_started() {
+        if let (Some(p), Some(from)) = (pin, ui.input(|i| i.pointer.press_origin())) {
+            let tip = on_screen(view, mid, p);
+            // the head and the point of the pin both pick it up
+            let head = tip - vec2(0.0, PIN_HEAD);
+            held = (from.distance(head) <= 12.0 || from.distance(tip) <= 6.0).then(|| tip - from);
+        }
+    }
+    let mut pin_moved = None;
+    let mut pin_at = pin.map(|p| on_screen(view, mid, p));
+    match (held, resp.interact_pointer_pos()) {
+        (Some(grip), Some(p)) if resp.dragged() || resp.drag_stopped() => {
+            let tip = rect.clamp(p + grip);
+            pin_at = Some(tip);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            if resp.drag_stopped() {
+                pin_moved = Some(at_point(view, mid, tip));
+                held = None;
+            }
+        }
+        _ => held = None,
+    }
+    ui.data_mut(|d| match held {
+        Some(g) => {
+            d.insert_temp(held_id, g);
+        }
+        None => {
+            d.remove::<egui::Vec2>(held_id);
+        }
+    });
+    if resp.dragged() && held.is_none() && pin_moved.is_none() {
         let d = resp.drag_delta();
         view.pan(d.x as f64, d.y as f64);
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -90,23 +151,17 @@ pub fn show(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size
         if resp.double_clicked() {
             view.zoom_by(1.0, off(p));
         }
+        if movable && held.is_none() && pin_at.is_some_and(|t| p.distance(t - vec2(0.0, PIN_HEAD)) <= 12.0) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
     }
-    let clicked = resp.clicked().then(|| resp.interact_pointer_pos()).flatten().map(|p| {
-        let (x, y) = world(view.center.0, view.center.1, view.zoom);
-        let (dx, dy) = off(p);
-        spot(x + dx, y + dy, view.zoom)
-    });
+    let clicked = resp.clicked().then(|| resp.interact_pointer_pos()).flatten().map(|p| at_point(view, mid, p));
 
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, LAND);
     draw_tiles(ui.ctx(), &painter, rect, view);
-    if let Some((lat, lon)) = pin {
-        let (px, py) = world(lat, lon, view.zoom);
-        let (cx, cy) = world(view.center.0, view.center.1, view.zoom);
-        // the copy of the world nearest the middle, once it has wrapped
-        let w = TILE * view.zoom.exp2();
-        let dx = px - cx - ((px - cx) / w).round() * w;
-        draw_pin(&painter, mid + vec2(dx as f32, (py - cy) as f32));
+    if let Some(tip) = pin_at {
+        draw_pin(&painter, tip);
     }
     painter.rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 
@@ -116,7 +171,7 @@ pub fn show(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size
     let mut button = |ui: &mut egui::Ui, icon: &str, tip: &str| {
         let r = Rect::from_min_size(at, vec2(side, side));
         at.y += side + 4.0;
-        ui.put(r, egui::Button::new(icon)).on_hover_text(tip).clicked()
+        ui.place(r, egui::Button::new(icon)).on_hover_text(tip).clicked()
     };
     if button(ui, icons::PLUS, tr("Zoom in")) {
         view.zoom_by(view.zoom.floor() + 1.0 - view.zoom, (0.0, 0.0));
@@ -133,7 +188,7 @@ pub fn show(ui: &mut egui::Ui, view: &mut MapView, pin: Option<(f64, f64)>, size
         }
     }
     credit(ui, &painter, rect, resp.id);
-    MapResponse { response: resp, clicked }
+    MapResponse { clicked, pin_moved }
 }
 
 /// The tiles under the view. Each is asked for nearest the middle last,
@@ -182,7 +237,7 @@ fn draw_tiles(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, view: &M
 
 /// A pin with its point on `tip`.
 fn draw_pin(painter: &egui::Painter, tip: Pos2) {
-    let head = tip - vec2(0.0, 17.0);
+    let head = tip - vec2(0.0, PIN_HEAD);
     let r = 8.0;
     painter.circle_filled(tip, 2.5, Color32::from_black_alpha(70));
     let side = vec2(r * 0.86, r * 0.5);
@@ -270,6 +325,31 @@ mod tests {
         let (x1, y1) = world(v.center.0, v.center.1, 16.0);
         assert_eq!(v.zoom, 16.0);
         assert!(((x0 - x1) - 80.0).abs() < 0.01 && ((y0 - y1) - 30.0).abs() < 0.01, "moved {} {}", x0 - x1, y0 - y1);
+    }
+
+    #[test]
+    fn the_pin_can_be_dragged_and_the_map_stays() {
+        let ctx = egui::Context::default();
+        let start = MapView { center: (51.5, -0.12), zoom: 16.0 };
+        let mut view = start;
+        // the pin's point is in the middle of the map, its head above it
+        let head = pos2(150.0, 80.0 - PIN_HEAD);
+        let mv = |x: f32, y: f32| egui::Event::PointerMoved(head + vec2(x, y));
+        let frames = vec![vec![mv(0.0, 0.0)], vec![button(head, true)], vec![mv(20.0, 0.0)], vec![mv(40.0, 10.0)], vec![button(head + vec2(40.0, 10.0), false)], vec![]];
+        let mut moved = None;
+        for (i, events) in frames.into_iter().enumerate() {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0))), time: Some(i as f64 / 60.0), events, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| {
+                let r = pick(ui, &mut view, Some((51.5, -0.12)), vec2(300.0, 160.0));
+                moved = moved.or(r.pin_moved);
+            });
+            out.textures_delta.clear();
+        }
+        assert_eq!(view, start, "the map stays while the pin moves");
+        let to = moved.expect("the pin was put down");
+        let (x0, y0) = world(51.5, -0.12, 16.0);
+        let (x1, y1) = world(to.0, to.1, 16.0);
+        assert!(((x1 - x0) - 40.0).abs() < 0.01 && ((y1 - y0) - 10.0).abs() < 0.01, "moved {} {}", x1 - x0, y1 - y0);
     }
 
     #[test]
