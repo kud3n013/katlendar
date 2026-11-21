@@ -1098,6 +1098,24 @@ pub fn write_todo(raw: Option<&str>, uid: &str, f: &TaskFields, stamp: NaiveDate
 mod tests {
     use super::*;
 
+    /// Places as real servers send them: Google over CalDAV, iCloud from an
+    /// iPhone, Nextcloud's web app and Thunderbird.
+    #[test]
+    fn places_from_real_servers() {
+        let now = NaiveDate::from_ymd_opt(2026, 11, 21).unwrap().and_hms_opt(12, 0, 0).unwrap();
+        let place = |text: &str| parse(text, now).unwrap().events.remove(0).place.unwrap();
+        let g = place(include_str!("sync/fixtures/google-caldav.ics"));
+        assert_eq!(g.text, "Dishoom Covent Garden, 12 Upper St Martin's Ln, London WC2H 9FB, UK");
+        assert_eq!(g.geo, None);
+        let a = place(include_str!("sync/fixtures/icloud.ics"));
+        assert!(a.text.starts_with("Berliner Philharmonie"), "{}", a.text);
+        let (lat, lon) = a.geo.unwrap();
+        assert!((lat - 52.509722).abs() < 1e-6 && (lon - 13.369722).abs() < 1e-6);
+        assert_eq!(place(include_str!("sync/fixtures/nextcloud.ics")).text, "Praxis Dr. Weber, Kastanienallee 12, Berlin");
+        let t = place(include_str!("sync/fixtures/thunderbird.ics"));
+        assert_eq!((t.text.as_str(), t.geo), ("Café Einstein Stammhaus", None));
+    }
+
     fn at(y: i32, m: u32, d: u32, h: u32, mi: u32) -> NaiveDateTime {
         NaiveDate::from_ymd_opt(y, m, d).unwrap().and_hms_opt(h, mi, 0).unwrap()
     }
