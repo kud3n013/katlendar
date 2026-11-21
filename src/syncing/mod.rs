@@ -13,6 +13,8 @@ mod edits;
 mod run;
 mod take;
 #[cfg(test)]
+mod live;
+#[cfg(test)]
 mod tests;
 
 /// What a background thread hands back to the window.

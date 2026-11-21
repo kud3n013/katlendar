@@ -7,6 +7,38 @@ This checklist does that, by hand, with real accounts.
 
 Use a calendar you don't mind cluttering, and delete the test events afterwards.
 
+## Run by machine
+
+`src/syncing/live.rs` holds checks that use the accounts set up in katlendar, through the app's own
+code (keyring, `open_account`, `sync::push`, `pull`). Each makes one event nine days ahead, named
+"katlendar map check (delete me)", changes it, and deletes it, also when a step fails. They only
+read data.json and config.json, so the app may stay open.
+
+```bash
+cargo test live_ -- --ignored --nocapture
+```
+
+`KATLENDAR_LIVE_CALENDAR=<name>` picks the calendar; otherwise the first writable one is used.
+Only Proton has a check so far.
+
+## Results
+
+**Proton, 2026-11-21** (`live_proton_places`, calendar "Main"):
+
+| Step | Read back |
+| --- | --- |
+| Made with an OpenStreetMap spot | words and spot |
+| What the server holds | `LOCATION`, `GEO` and `X-APPLE-STRUCTURED-LOCATION`, all three |
+| Title changed in katlendar | words and spot kept |
+| Place cleared in katlendar | no place, no stale spot |
+| Deleted | yes |
+
+Proton's server can't see the encrypted part, so it can't drop the spot lines; this check proves
+our own writing and reading through the real API. Whether **Proton's web app** keeps them when the
+event is edited there is still open (question 2).
+
+Google, Outlook and iCloud or Nextcloud: no such accounts are set up here, so not checked.
+
 ## What we most need to know
 
 1. **Does Google keep `GEO` and `X-APPLE-STRUCTURED-LOCATION` over CalDAV?**

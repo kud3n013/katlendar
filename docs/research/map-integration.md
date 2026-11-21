@@ -304,8 +304,10 @@ Each phase leaves the app working and can ship alone.
      - They found one bug: Apple's `X-TITLE` holds only the place's name (the first line of
        `LOCATION`), so an unchanged iPhone place looked changed and lost its map handle. Fixed;
        Apple's line is now also written with the first line only.
-     - The live checks need real accounts and are not done yet. The checklist is
-       `docs/map-checks.md`.
+     - The live checks need real accounts. The checklist is `docs/map-checks.md`, and
+       `src/syncing/live.rs` runs them by machine where an account is set up.
+     - Proton, checked live on 2026-11-21: the place, its spot and Apple's line are kept, and
+       survive a title change. Google, Outlook and iCloud or Nextcloud are not checked yet.
 
 ## 7. Open questions
 
@@ -316,4 +318,5 @@ Each phase leaves the app working and can ship alone.
   default plus a "Open in Google Maps" link already covers most Google Calendar users, because
   Google geocodes the text itself.
 - Confirm by testing: does Google's CalDAV keep or drop `GEO` and `X-APPLE-STRUCTURED-LOCATION`?
-  Does Proton keep them in the encrypted part?
+  Does Proton keep them in the encrypted part? (Proton's server does; its web app, when the
+  event is edited there, is not checked yet.)
