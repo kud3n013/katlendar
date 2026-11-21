@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
+use super::USER_AGENT;
+
 /// The side of a tile, in pixels.
 pub const TILE: f64 = 256.0;
 /// The closest zoom the tile server draws.
@@ -18,8 +20,6 @@ pub const MAX_ZOOM: u8 = 19;
 /// Who to thank, under every map, and where that is explained.
 pub const ATTRIBUTION: &str = "© OpenStreetMap contributors";
 pub const COPYRIGHT: &str = "https://www.openstreetmap.org/copyright";
-/// The tile policy asks for a name that tells this app apart.
-const USER_AGENT: &str = concat!("katlendar/", env!("CARGO_PKG_VERSION"), " (+https://github.com/kud3n013/katlendar)");
 
 /// Textures kept in memory; the ones looked at longest ago go first.
 const IN_MEMORY: usize = 256;

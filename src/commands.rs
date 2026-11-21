@@ -392,7 +392,8 @@ impl App {
                 return self.run(ctx, c);
             }
         }
-        if pressed(Key::Escape) {
+        // a place picker over the window closes first
+        if pressed(Key::Escape) && !crate::maps::picker::is_open(ctx) {
             if self.command_bar.take().is_some() {
             } else if self.new_task_open {
                 self.new_task_open = false;

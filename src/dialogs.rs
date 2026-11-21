@@ -484,21 +484,37 @@ pub(crate) fn swatches(ui: &mut egui::Ui, base: [u8; 3], base_tip: &str, color: 
 
 /// The place of an event or task, as one line of text. Typing a new
 /// text forgets the spot on the map the old one had.
-/// Beside it, a button that shows the place on the map `open` names.
-fn place_field(ui: &mut egui::Ui, place: &mut Option<Place>, open: OpenIn) {
+/// Beside it, a button that finds the place on a map, and one that shows
+/// it on the map `open` names. `salt` tells the editors' pickers apart.
+fn place_field(ui: &mut egui::Ui, salt: &str, place: &mut Option<Place>, open: OpenIn) {
+    let picker = crate::ids::place_picker(salt);
+    // test aid: the first field drawn opens its picker
+    if let Some(words) = &crate::testaid::get().pick {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| crate::maps::picker::open_searching(ui.ctx(), picker, place, words));
+    }
     ui.horizontal(|ui| {
         // a window that can't be changed has its own, enabled one
         let link = place.as_ref().filter(|_| ui.is_enabled()).and_then(|p| open.link(p));
-        let button_w = if link.is_some() { ui.spacing().interact_size.y + ui.spacing().item_spacing.x } else { 0.0 };
+        let find = ui.is_enabled();
+        let button = ui.spacing().interact_size.y + ui.spacing().item_spacing.x;
+        let buttons = (find as u8 + link.is_some() as u8) as f32 * button;
         let mut text = place_text(place).to_string();
-        let w = (ui.available_width() - button_w).max(80.0);
+        let w = (ui.available_width() - buttons).max(80.0);
         if ui.add(egui::TextEdit::singleline(&mut text).hint_text(tr("Add a place")).desired_width(w)).changed() {
             set_place_text(place, &text);
+        }
+        if find && ui.button(icons::MAP_PIN).on_hover_text(tr("Find on the map")).clicked() {
+            crate::maps::picker::open(ui.ctx(), picker, place);
         }
         if let Some(url) = link {
             open_place_button(ui, &url, open, false);
         }
     });
+    match crate::maps::picker::show(ui.ctx(), picker) {
+        Some(crate::maps::picker::Closed::Use(p)) => *place = p,
+        Some(crate::maps::picker::Closed::Cancel) | None => {}
+    }
 }
 
 /// The map under a place whose spot is known, which can be dragged and
@@ -516,7 +532,7 @@ fn place_map(ui: &mut egui::Ui, salt: &str, spot: (f64, f64)) {
 /// pin and "Open in …" for a window where the place can't be edited.
 fn open_place_button(ui: &mut egui::Ui, url: &str, open: OpenIn, words: bool) {
     let what = trf("Open in {}", &[&open.name()]);
-    let label = if words { format!("{}  {what}", icons::MAP_PIN) } else { icons::MAP_PIN.to_string() };
+    let label = if words { format!("{}  {what}", icons::MAP_PIN) } else { icons::EXTERNAL_LINK.to_string() };
     let b = ui.button(label).on_hover_text(if words { url.to_string() } else { what });
     if b.clicked() {
         crate::platform::open_url(url);
@@ -767,6 +783,10 @@ impl App {
                         ui.end_row();
                     }
 
+                    label(ui, tr("Location"));
+                    place_field(ui, "create", &mut c.ev.place, p.open_places_in);
+                    ui.end_row();
+
                     label(ui, tr("Notes"));
                     ui.add(egui::TextEdit::multiline(&mut c.ev.notes).hint_text(tr("Add a note")).desired_rows(3).desired_width(f32::INFINITY));
                     ui.end_row();
@@ -836,6 +856,7 @@ impl App {
                         id: task_id,
                         title: ev.title.clone(),
                         notes: ev.notes.clone(),
+                        place: ev.place.clone(),
                         duration_min: Some(ev.minutes()),
                         // a repeat counts from the due date: without one, the block's day
                         due: due.or((c.repeat != Repeat::None).then_some(day)),
@@ -1589,7 +1610,7 @@ impl App {
                     ui.end_row();
                     // a task's block has its task's place, in the task's fields
                     editor_label(ui, tr("Location"), muted);
-                    place_field(ui, &mut ed.ev.place, open);
+                    place_field(ui, "event", &mut ed.ev.place, open);
                     ui.end_row();
                     if let Some(spot) = ed.ev.place.as_ref().and_then(|p| p.geo).filter(|_| locked.is_none()) {
                         ui.label("");
@@ -1879,7 +1900,7 @@ impl App {
             });
             ui.end_row();
             editor_label(ui, tr("Location"), muted);
-            place_field(ui, &mut ed.task.place, self.data.prefs.open_places_in);
+            place_field(ui, "task", &mut ed.task.place, self.data.prefs.open_places_in);
             ui.end_row();
             if let Some(spot) = ed.task.place.as_ref().and_then(|p| p.geo) {
                 ui.label("");
