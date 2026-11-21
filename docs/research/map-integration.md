@@ -226,6 +226,17 @@ pub struct Place {
   - Stored in `Prefs` the way `buffers: Vec<CalBuffer>` is: `calendar_maps: Vec<CalMap>`.
   - Calendars of a Google account start out preferring Google Maps for Open in, and for search
     when a key is set.
+- **As built in phase 6:**
+  - The per-calendar choices sit on the Maps page, under "Maps for each calendar", not in
+    `page_calendars`. That page is already full of accounts and sign-in, and the two choices
+    read better next to the defaults they override.
+  - A calendar with nothing set follows its start-out value, which is worked out each time from
+    its account. `calendar_maps` keeps only the calendars set to something else, so a later
+    change of the defaults reaches every calendar left alone.
+  - The Google key row shows when the app default or any calendar finds places with Google.
+    Without a key, those calendars still search OpenStreetMap.
+  - Tasks have no calendar, so the task editor uses the app defaults.
+  - An address that is not a web address in "Photon server" is ignored, and the page says so.
 
 ### Code layout
 

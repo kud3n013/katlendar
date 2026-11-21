@@ -639,6 +639,8 @@ impl App {
         all_tags.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         let muted = self.pal.muted;
         let p = self.data.prefs.clone();
+        // each calendar's maps, for the place of the calendar picked
+        let cal_maps: std::collections::HashMap<u64, (OpenIn, MapProvider)> = self.data.calendars.iter().map(|c| (c.id, (self.data.open_in_of(c.id), self.data.map_provider_of(c.id)))).collect();
         let look = self.pick_look();
         let w = 380.0;
         let pos = place_beside(ctx, ids::create_popup(), c.anchor_rect, egui::vec2(w + 20.0, 400.0));
@@ -785,7 +787,8 @@ impl App {
                     }
 
                     label(ui, tr("Location"));
-                    place_field(ui, "create", &mut c.ev.place, p.open_places_in, p.map_provider);
+                    let (open, provider) = cal_maps.get(&c.ev.calendar).copied().unwrap_or((p.open_places_in, p.map_provider));
+                    place_field(ui, "create", &mut c.ev.place, open, provider);
                     ui.end_row();
 
                     label(ui, tr("Notes"));
@@ -1491,8 +1494,8 @@ impl App {
         let muted = self.pal.muted;
         // a read-only event: only Skip and the side notes can change
         let locked = if ed.is_new { None } else { self.data.locked(&ed.ev) };
-        let open = self.data.prefs.open_places_in;
-        let provider = self.data.prefs.map_provider;
+        let open = self.data.open_in_of(ed.ev.calendar);
+        let provider = self.data.map_provider_of(ed.ev.calendar);
         if let Some(why) = locked {
             ui.label(RichText::new(why).size(theme::size::TINY).color(muted));
             ui.add_space(2.0);

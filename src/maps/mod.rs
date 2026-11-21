@@ -3,7 +3,7 @@
 //! place with them.
 
 pub mod google;
-mod osm;
+pub mod osm;
 pub mod picker;
 mod tiles;
 mod widget;

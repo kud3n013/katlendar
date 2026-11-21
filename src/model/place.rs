@@ -86,6 +86,55 @@ impl MapProvider {
     }
 }
 
+/// The maps one calendar's places use, in place of the app's own. None
+/// follows the app's choice on the Maps page.
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug, Default)]
+#[serde(default)]
+pub struct CalMap {
+    pub calendar: u64,
+    pub provider: Option<MapProvider>,
+    pub open_in: Option<OpenIn>,
+}
+
+impl super::Data {
+    /// The maps a calendar starts out with: Google's for a calendar of a
+    /// Google account, since its people use Google Maps already; else the
+    /// app's own.
+    pub fn cal_map_start(&self, cal: u64) -> CalMap {
+        let google = self.calendar(cal).and_then(|c| c.account).is_some_and(|a| self.accounts.iter().any(|x| x.id == a && x.google));
+        match google {
+            true => CalMap { calendar: cal, provider: Some(MapProvider::Google), open_in: Some(OpenIn::Google) },
+            false => CalMap { calendar: cal, ..Default::default() },
+        }
+    }
+
+    /// The maps a calendar's places use, as set or as it starts out.
+    pub fn cal_map(&self, cal: u64) -> CalMap {
+        self.prefs.calendar_maps.iter().find(|m| m.calendar == cal).copied().unwrap_or_else(|| self.cal_map_start(cal))
+    }
+
+    /// Keeps a calendar's maps; one the same as it starts out with need
+    /// not be kept.
+    pub fn set_cal_map(&mut self, m: CalMap) {
+        let start = self.cal_map_start(m.calendar);
+        let maps = &mut self.prefs.calendar_maps;
+        maps.retain(|x| x.calendar != m.calendar);
+        if m != start {
+            maps.push(m);
+        }
+    }
+
+    /// Where the places of calendar `cal` are found and their maps come from.
+    pub fn map_provider_of(&self, cal: u64) -> MapProvider {
+        self.cal_map(cal).provider.unwrap_or(self.prefs.map_provider)
+    }
+
+    /// The map "Open in" shows the places of calendar `cal` on.
+    pub fn open_in_of(&self, cal: u64) -> OpenIn {
+        self.cal_map(cal).open_in.unwrap_or(self.prefs.open_places_in)
+    }
+}
+
 /// The text of a place, empty for none.
 pub fn place_text(p: &Option<Place>) -> &str {
     p.as_ref().map(|p| p.text.as_str()).unwrap_or("")
@@ -299,6 +348,39 @@ mod tests {
         assert_eq!(p, None);
         assert_eq!(Place::of("", Some((1.0, 2.0))), Some(Place { text: String::new(), geo: Some((1.0, 2.0)), ..Default::default() }));
         assert_eq!(Place::of(" ", None), None);
+    }
+
+    fn two_calendars() -> crate::model::Data {
+        use crate::model::{Account, Calendar};
+        let mut d = crate::model::Data::sample(NaiveDate::from_ymd_opt(2026, 11, 18).unwrap());
+        d.accounts = vec![Account { id: 7, google: true, ..Default::default() }, Account { id: 8, ..Default::default() }];
+        d.calendars = vec![Calendar { id: 1, account: Some(7), ..Default::default() }, Calendar { id: 2, account: Some(8), ..Default::default() }];
+        d.prefs = Default::default();
+        d.prefs.map_provider = MapProvider::OpenStreetMap;
+        d.prefs.open_places_in = OpenIn::Apple;
+        d
+    }
+
+    #[test]
+    fn a_google_calendar_starts_out_on_google_maps() {
+        let d = two_calendars();
+        assert_eq!((d.map_provider_of(1), d.open_in_of(1)), (MapProvider::Google, OpenIn::Google));
+        assert_eq!((d.map_provider_of(2), d.open_in_of(2)), (MapProvider::OpenStreetMap, OpenIn::Apple), "others follow the app");
+        assert!(d.prefs.calendar_maps.is_empty(), "nothing is kept for that");
+    }
+
+    #[test]
+    fn a_calendars_maps_are_kept_only_when_they_differ() {
+        let mut d = two_calendars();
+        d.set_cal_map(CalMap { calendar: 1, provider: None, open_in: Some(OpenIn::Google) });
+        assert_eq!((d.map_provider_of(1), d.open_in_of(1)), (MapProvider::OpenStreetMap, OpenIn::Google), "back to the app's provider");
+        d.set_cal_map(CalMap { calendar: 2, provider: Some(MapProvider::Google), open_in: None });
+        assert_eq!(d.prefs.calendar_maps.len(), 2);
+        d.set_cal_map(d.cal_map_start(1));
+        d.set_cal_map(CalMap { calendar: 2, ..Default::default() });
+        assert!(d.prefs.calendar_maps.is_empty(), "back to how they started");
+        d.prefs.open_places_in = OpenIn::OpenStreetMap;
+        assert_eq!(d.open_in_of(2), OpenIn::OpenStreetMap, "a calendar left alone follows a later change");
     }
 
     fn google_place(from: NaiveDate) -> Place {

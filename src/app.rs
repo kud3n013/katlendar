@@ -421,6 +421,7 @@ impl App {
         if shot.is_none() {
             crate::maps::google::load_key(data.prefs.plaintext_secrets);
         }
+        crate::maps::osm::set_server(&data.prefs.photon_server);
         // where the person left off, or the views they picked to start on
         let p = &data.prefs;
         let resume = p.start_last_view && shot.is_none();
