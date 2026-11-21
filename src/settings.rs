@@ -241,6 +241,28 @@ fn google_key_row(ui: &mut egui::Ui, allow_file: bool) {
     ui.data_mut(|d| d.insert_temp(id, f));
 }
 
+/// A narrow choice, `w` wide, in a row that holds more than one.
+fn pick<T: PartialEq + Copy>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, w: f32, value: &mut T, options: &[(T, String)]) -> egui::Response {
+    let current = options.iter().find(|(v, _)| v == value).map(|(_, l)| l.clone()).unwrap_or_default();
+    // the width is only the least a combo takes; a box of its own keeps
+    // a long choice from pushing the next one away
+    let h = ui.spacing().interact_size.y;
+    ui.allocate_ui_with_layout(vec2(w, h), Layout::left_to_right(Align::Center), |ui| {
+        ui.set_max_width(w);
+        egui::ComboBox::from_id_salt(id)
+            .width(w)
+            .truncate()
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                for (v, l) in options {
+                    ui.selectable_value(value, *v, l);
+                }
+            })
+            .response
+    })
+    .inner
+}
+
 fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, value: &mut T, options: &[(T, String)]) {
     let current = options.iter().find(|(v, _)| v == value).map(|(_, l)| l.clone()).unwrap_or_default();
     let cw = ui.data(|d| d.get_temp::<f32>(ids::control_w())).unwrap_or(CONTROL_W);
@@ -482,19 +504,86 @@ impl App {
     }
 
     fn page_maps(&mut self, ui: &mut egui::Ui) {
+        let muted = self.pal.muted;
         heading(ui, tr("Maps"));
+        if !finding(ui) {
+            let note = tr("Searching for a place sends what you type, and the part of the world the map shows, to Photon (komoot's, unless you set your own) or to Google. A map under a place is fetched from OpenStreetMap or Google when it is shown. Spots found with Google stay on this computer for 30 days and are never sent to your calendar servers.");
+            ui.add(egui::Label::new(RichText::new(note).size(theme::size::UI).color(muted)).wrap());
+            ui.add_space(10.0);
+        }
         let p = &mut self.data.prefs;
-        row(ui, tr("Open places in"), tr("The map the button beside a place opens it on: Google Maps, Apple Maps, OpenStreetMap or the map app."), |ui| {
+        row(ui, tr("Open places in"), tr("The map the button beside a place opens it on: Google Maps, Apple Maps, OpenStreetMap or the map app. Also for directions."), |ui| {
             let opts: Vec<(OpenIn, String)> = OpenIn::all().into_iter().map(|o| (o, o.name().to_string())).collect();
             combo(ui, "op", &mut p.open_places_in, &opts);
         });
-        row(ui, tr("Find places with"), tr("Where places are looked up and the map under a place comes from. Google Maps needs an API key of your own."), |ui| {
+        row(ui, tr("Find places with"), tr("Where places are looked up and the map under a place comes from: OpenStreetMap, or Google Maps with an API key of your own. Location, address, search."), |ui| {
             let opts: Vec<(MapProvider, String)> = [MapProvider::OpenStreetMap, MapProvider::Google].into_iter().map(|m| (m, m.name().to_string())).collect();
             combo(ui, "mp", &mut p.map_provider, &opts);
         });
-        if p.map_provider == MapProvider::Google {
-            let allow_file = p.plaintext_secrets;
-            google_key_row(ui, allow_file);
+        // the key is asked for whenever some calendar finds places with Google
+        let google = p.map_provider == MapProvider::Google || self.data.calendars.iter().any(|c| self.data.map_provider_of(c.id) == MapProvider::Google);
+        if google {
+            google_key_row(ui, self.data.prefs.plaintext_secrets);
+        }
+        self.calendar_maps(ui);
+        heading(ui, tr("Advanced"));
+        let p = &mut self.data.prefs;
+        row(ui, tr("Photon server"), tr("Places from OpenStreetMap are looked up on a Photon server. Leave it empty for komoot's public one, or give the address of your own."), |ui| {
+            let cw = ui.data(|d| d.get_temp::<f32>(ids::control_w())).unwrap_or(CONTROL_W);
+            if ui.add(egui::TextEdit::singleline(&mut p.photon_server).hint_text(crate::maps::osm::PHOTON).desired_width(cw)).changed() {
+                crate::maps::osm::set_server(&p.photon_server);
+            }
+        });
+        if !finding(ui) && !p.photon_server.trim().is_empty() && crate::maps::osm::server_of(&p.photon_server).is_none() {
+            ui.label(RichText::new(tr("That isn't a web address, so komoot's server is used.")).size(theme::size::CAPTION).color(theme::DANGER));
+        }
+    }
+
+    /// Each calendar's maps: where its places are found, and the map
+    /// "Open in" shows them on.
+    fn calendar_maps(&mut self, ui: &mut egui::Ui) {
+        let muted = self.pal.muted;
+        let title = tr("Maps for each calendar");
+        let what = tr("A calendar can find its places and open them on other maps than the ones above. Calendars of a Google account start out with Google Maps.");
+        if finding(ui) {
+            let names: Vec<&str> = self.data.calendars.iter().map(|c| c.name.as_str()).collect();
+            let words = [&["calendar", "map", "google", "openstreetmap", "osm", "apple", "location", "place", "open in", "per calendar"][..], &names].concat();
+            page_result(ui, Page::Maps, title, what, &words);
+            return;
+        }
+        heading(ui, title);
+        ui.add(egui::Label::new(RichText::new(what).size(theme::size::UI).color(muted)).wrap());
+        ui.add_space(6.0);
+        let follow = tr("As above").to_string();
+        let providers = [(None, follow.clone()), (Some(MapProvider::OpenStreetMap), MapProvider::OpenStreetMap.name().to_string()), (Some(MapProvider::Google), MapProvider::Google.name().to_string())];
+        let opens: Vec<(Option<OpenIn>, String)> = std::iter::once((None, follow)).chain(OpenIn::all().into_iter().map(|o| (Some(o), o.name().to_string()))).collect();
+        // the names of the two columns, over the choices; as `row` places them
+        let avail = ui.available_width();
+        let half = (((avail * 0.42).clamp(170.0, CONTROL_W) - 8.0) / 2.0).floor();
+        ui.allocate_ui_with_layout(vec2(avail, 22.0), Layout::right_to_left(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            for t in [tr("Open in"), tr("Find with")] {
+                ui.allocate_ui_with_layout(vec2(half, 22.0), Layout::left_to_right(Align::Center), |ui| {
+                    ui.set_width(half);
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(t).size(theme::size::CAPTION).color(muted));
+                });
+            }
+        });
+        let cals: Vec<(u64, String)> = self.data.calendars.iter().map(|c| (c.id, c.name.clone())).collect();
+        for (cid, name) in cals {
+            let mut m = self.data.cal_map(cid);
+            let was = m;
+            row(ui, &name, "", |ui| {
+                let cw = ui.data(|d| d.get_temp::<f32>(ids::control_w())).unwrap_or(CONTROL_W);
+                let half = ((cw - 8.0) / 2.0).floor();
+                ui.spacing_mut().item_spacing.x = 8.0;
+                pick(ui, ("cmp", cid), half, &mut m.provider, &providers).on_hover_text(tr("Find places with"));
+                pick(ui, ("coi", cid), half, &mut m.open_in, &opens).on_hover_text(tr("Open places in"));
+            });
+            if m != was {
+                self.data.set_cal_map(m);
+            }
         }
     }
 

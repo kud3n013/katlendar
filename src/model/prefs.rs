@@ -159,6 +159,10 @@ pub struct Prefs {
     pub open_places_in: OpenIn,
     /// where places are found and maps come from
     pub map_provider: MapProvider,
+    /// calendars whose places use other maps than the app's
+    pub calendar_maps: Vec<CalMap>,
+    /// the Photon server places are looked up on; empty for komoot's
+    pub photon_server: String,
 }
 
 impl Default for Prefs {
@@ -217,6 +221,8 @@ impl Default for Prefs {
             check_updates: true,
             open_places_in: OpenIn::default(),
             map_provider: MapProvider::default(),
+            calendar_maps: vec![],
+            photon_server: String::new(),
         }
     }
 }

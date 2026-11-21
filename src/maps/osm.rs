@@ -17,7 +17,29 @@ use super::USER_AGENT;
 use crate::sync::oauth::url_encode;
 
 /// The public Photon server, free to use fairly.
-const PHOTON: &str = "https://photon.komoot.io";
+pub const PHOTON: &str = "https://photon.komoot.io";
+
+/// A Photon server of the person's own, in place of komoot's.
+static SERVER: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+
+/// Looks places up on `url`, or on komoot's server when it is empty or
+/// not a web address.
+pub fn set_server(url: &str) {
+    *SERVER.write().unwrap_or_else(|e| e.into_inner()) = server_of(url).unwrap_or_default();
+}
+
+/// The server `url` names, written the way questions are added to it.
+pub fn server_of(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    (!rest.is_empty() && !rest.contains(char::is_whitespace)).then(|| url.to_string())
+}
+
+/// The Photon server questions go to.
+fn photon() -> String {
+    let s = SERVER.read().unwrap_or_else(|e| e.into_inner());
+    if s.is_empty() { PHOTON.to_string() } else { s.clone() }
+}
 /// How long typing has to pause before a search goes out.
 pub const PAUSE: Duration = Duration::from_millis(300);
 /// The least time between two questions to the server.
@@ -82,7 +104,7 @@ pub enum Answer {
 /// The search for `q`, with places near `near` (a spot and a map zoom)
 /// first. The spot is rounded, so a small move of the map asks nothing new.
 pub fn search_url(q: &str, near: Option<((f64, f64), f64)>) -> String {
-    let mut url = format!("{PHOTON}/api/?q={}&limit={LIMIT}", url_encode(q.trim()));
+    let mut url = format!("{}/api/?q={}&limit={LIMIT}", photon(), url_encode(q.trim()));
     if let Some(l) = lang() {
         url += &format!("&lang={l}");
     }
@@ -95,7 +117,7 @@ pub fn search_url(q: &str, near: Option<((f64, f64), f64)>) -> String {
 
 /// The address at a spot.
 pub fn reverse_url((lat, lon): (f64, f64)) -> String {
-    let mut url = format!("{PHOTON}/reverse?lat={lat:.6}&lon={lon:.6}&limit=1");
+    let mut url = format!("{}/reverse?lat={lat:.6}&lon={lon:.6}&limit=1", photon());
     if let Some(l) = lang() {
         url += &format!("&lang={l}");
     }
@@ -422,5 +444,14 @@ mod tests {
         assert_eq!(b.want(&a("x"), ms(2000), Duration::ZERO), Answer::Failed("down".into()));
         assert_eq!(b.want(&a("x"), ms(1000) + RETRY, Duration::ZERO), Answer::Waiting);
         assert_eq!(b.next(ms(1000) + RETRY), Ok(a("x")));
+    }
+
+    #[test]
+    fn a_photon_server_of_ones_own() {
+        assert_eq!(server_of(" https://photon.example.org/ ").as_deref(), Some("https://photon.example.org"));
+        assert_eq!(server_of("http://localhost:2322").as_deref(), Some("http://localhost:2322"));
+        assert_eq!(server_of("photon.example.org"), None, "a web address only");
+        assert_eq!(server_of("https://"), None);
+        assert_eq!(server_of(""), None);
     }
 }
