@@ -594,6 +594,7 @@ impl App {
         self.ui_settings_window(ctx);
         self.dlg_command(ctx);
         self.dlg_new_task(ctx);
+        self.dlg_due_plan(ctx);
         self.update_notice(ctx);
         self.dlg_toast(ctx);
     }
@@ -1163,6 +1164,48 @@ impl App {
     }
 
     /// Ctrl+T: a bar in the middle, like the command bar, for a new task.
+    /// Asked when a deadline is let go in the hours: plan a session of the
+    /// task there, or send the deadline back to its day.
+    fn dlg_due_plan(&mut self, ctx: &egui::Context) {
+        let Some(plan) = self.due_plan.as_ref() else { return };
+        let (tid, start, at) = (plan.task, plan.start, plan.at);
+        let Some(t) = self.data.task(tid).cloned() else {
+            self.due_plan = None;
+            return;
+        };
+        let p = self.data.prefs.clone();
+        let (muted, warn) = (self.pal.muted, theme::DANGER);
+        let (mut go, mut back) = (false, false);
+        let resp = egui::Modal::new(ids::due_plan()).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.label(RichText::new(trf("Plan \"{}\" here?", &[&t.title])).size(theme::size::LARGE).strong());
+            ui.add_space(4.0);
+            ui.label(format!("{}, {}", start.format("%A, %b %-d"), p.fmt_time(start.time())));
+            if let Some(due) = t.due {
+                ui.label(RichText::new(trf("Its deadline stays on {}.", &[&due.format("%A, %b %-d")])).color(muted));
+                if start.date() > due {
+                    ui.label(RichText::new(tr("This is after the deadline.")).color(warn));
+                }
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                go = ui.button(RichText::new(tr("Plan here")).strong()).on_hover_text(tr("Enter")).clicked();
+                back = ui.button(tr("Cancel")).on_hover_text(tr("Esc")).clicked();
+            });
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                go = true;
+            }
+        });
+        if go {
+            self.due_plan = None;
+            self.schedule_task(ctx, tid, start);
+        } else if back || resp.should_close() {
+            // the deadline flies back to its day
+            self.due_plan = None;
+            self.due_chips.from = Some((tid, at));
+        }
+    }
+
     fn dlg_new_task(&mut self, ctx: &egui::Context) {
         if !self.new_task_open {
             return;

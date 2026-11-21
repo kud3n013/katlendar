@@ -52,6 +52,12 @@ fixed! {
     toast = "toast";
     /// the notice that a newer version is out
     update_notice = "update_notice";
+    /// the question before a deadline dropped in the hours is planned there
+    due_plan = "due_plan";
+    /// a deadline flying back to its day, over everything
+    due_fly = "due_fly";
+    /// the all-day rows of the week, growing and shrinking
+    due_head = "due_head";
     quick_nav_area = "quicknav_area";
     panel_bottom = "panel_bottom";
     /// the Save, Cancel and Delete row of an editor window
@@ -111,6 +117,8 @@ keyed! {
     /// a tag being renamed in the settings
     tag_name = "tag_name";
     due_glow = "due";
+    /// a deadline on the all-day rows, for its motion
+    due_chip = "due_chip";
     /// a block on one day of the grid, for its settling motion
     block = "block";
     block_glow = "glow";
