@@ -91,6 +91,8 @@ fixed! {
     grid_shape = "grid_shape";
     /// which edge a dragged block is held at, and since when
     drag_edge = "drag_edge";
+    /// how big a read-only event's "Open in …" button was drawn
+    maps_button = "maps_button";
 }
 
 keyed! {
