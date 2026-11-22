@@ -560,12 +560,16 @@ fn place_map(ui: &mut egui::Ui, salt: &str, spot: (f64, f64), provider: MapProvi
     ui.data_mut(|d| d.insert_temp(id, (view, spot)));
 }
 
+/// What `open_place_button` shows.
+fn open_place_label(open: OpenIn, words: bool) -> String {
+    if words { format!("{}  {}", icons::MAP_PIN, trf("Open in {}", &[&open.name()])) } else { icons::EXTERNAL_LINK.to_string() }
+}
+
 /// Opens a place's link in the browser or map app: a pin alone, or a
 /// pin and "Open in …" for a window where the place can't be edited.
 fn open_place_button(ui: &mut egui::Ui, url: &str, open: OpenIn, words: bool) -> egui::Rect {
     let what = trf("Open in {}", &[&open.name()]);
-    let label = if words { format!("{}  {what}", icons::MAP_PIN) } else { icons::EXTERNAL_LINK.to_string() };
-    let b = ui.button(label).on_hover_text(if words { url.to_string() } else { what });
+    let b = ui.button(open_place_label(open, words)).on_hover_text(if words { url.to_string() } else { what });
     if b.clicked() {
         crate::platform::open_url(url);
     }
@@ -1542,6 +1546,10 @@ impl App {
             (to_title, to_notes) = (false, ed.focus);
         }
         let mut notes = ed.ev.notes.clone();
+        // a read-only event's place can still be looked up: the button keeps
+        // its row under the place, and is drawn after the fields, enabled
+        let maps_link = ed.ev.place.as_ref().filter(|_| locked.is_some() && !is_task).and_then(|p| open.link(p));
+        let mut maps_at = None;
         ui.add_enabled_ui(locked.is_none(), |ui| {
             save |= editor_title(ui, &mut ed.ev.title, if is_task { tr("New Task") } else { tr("New Event") }, &mut to_title);
             let was_all_day = ed.ev.all_day;
@@ -1652,6 +1660,14 @@ impl App {
                     editor_label(ui, tr("Location"), muted);
                     place_field(ui, "event", &mut ed.ev.place, open, provider);
                     ui.end_row();
+                    if maps_link.is_some() {
+                        ui.label("");
+                        let size = ui.data(|d| d.get_temp::<egui::Vec2>(ids::maps_button())).unwrap_or_else(|| {
+                            egui::vec2(icon_button_w(ui, &open_place_label(open, true)), ui.spacing().interact_size.y)
+                        });
+                        maps_at = Some(ui.allocate_exact_size(size, egui::Sense::hover()).0);
+                        ui.end_row();
+                    }
                     if let Some(spot) = ed.ev.place.as_ref().and_then(|p| p.geo).filter(|_| locked.is_none()) {
                         ui.label("");
                         place_map(ui, "event", spot, provider);
@@ -1671,12 +1687,15 @@ impl App {
             self.task_fields(ui, t);
         }
         });
-        // the place of an event that can't be changed can still be looked up
-        if locked.is_some() && !is_task {
-            if let Some(url) = ed.ev.place.as_ref().and_then(|p| open.link(p)) {
-                ui.add_space(4.0);
-                open_place_button(ui, &url, open, true);
+        if let (Some(url), Some(at)) = (&maps_link, maps_at) {
+            let b = open_place_button(&mut ui.new_child(egui::UiBuilder::new().max_rect(at)), url, open, true);
+            if (b.size() - at.size()).length() > 0.5 {
+                ui.data_mut(|d| d.insert_temp(ids::maps_button(), b.size()));
+                ui.ctx().request_discard("the map button took other room");
             }
+        }
+        // the map of an event that can't be changed can still be moved
+        if locked.is_some() && !is_task {
             if let Some(spot) = ed.ev.place.as_ref().and_then(|p| p.geo) {
                 ui.add_space(4.0);
                 place_map(ui, "event", spot, provider);
@@ -1911,16 +1930,22 @@ impl App {
         ui.checkbox(&mut ed.task.done, tr("Completed"));
         editor_grid(ui, "taskgrid", |ui| {
             editor_label(ui, tr("Due"), muted);
+            // the quick days go under the date: in one row they'd be wider
+            // than the window, and push the place's buttons past its edge
             ui.horizontal(|ui| {
                 date_field(ui, "tdue", &mut ed.due_text, 96.0, look);
+                if ui.small_button(icons::X).on_hover_text(tr("No due date")).clicked() {
+                    ed.due_text.clear();
+                }
+            });
+            ui.end_row();
+            ui.label("");
+            ui.horizontal(|ui| {
                 if ui.small_button(tr("Today")).clicked() {
                     ed.due_text = today.to_string();
                 }
                 if ui.small_button(tr("Tomorrow")).clicked() {
                     ed.due_text = (today + Duration::days(1)).to_string();
-                }
-                if ui.small_button(icons::X).on_hover_text(tr("No due date")).clicked() {
-                    ed.due_text.clear();
                 }
             });
             ui.end_row();
