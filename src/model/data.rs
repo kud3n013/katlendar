@@ -146,6 +146,25 @@ impl Data {
         let Some(s) = self.event(id).and_then(|e| e.series) else { return 0 };
         self.events.iter().filter(|e| e.series == Some(s) && e.id != id).count()
     }
+    /// Removes the events of the event `id`'s repeat that `scope` names,
+    /// it among them; returns how many went.
+    pub fn delete_from_series(&mut self, id: u64, scope: SeriesScope) -> usize {
+        let Some(e) = self.event(id) else { return 0 };
+        let (series, from) = (e.series, e.start.date());
+        let before = self.events.len();
+        self.events.retain(|e| {
+            let reached = e.id == id
+                || (e.series.is_some()
+                    && e.series == series
+                    && match scope {
+                        SeriesScope::This => false,
+                        SeriesScope::All => true,
+                        SeriesScope::Following => e.start.date() >= from,
+                    });
+            !reached
+        });
+        before - self.events.len()
+    }
     /// Saves `new`, the edited event `new.id` that was `base`, to the
     /// events of its repeat that `scope` names. "This and following" makes
     /// them a repeat of their own, so a later edit of the earlier ones

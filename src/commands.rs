@@ -254,7 +254,16 @@ impl App {
             }
             Cmd::Delete => {
                 if let Some(id) = self.selected {
-                    self.delete_event(ctx, id);
+                    // one of a repeat's events: its editor asks which of them to delete
+                    let ask = self.data.event(id).is_some_and(|e| e.task_id.is_none() && self.data.locked(e).is_none()) && self.data.series_others(id) > 0;
+                    if ask {
+                        self.edit_event(id);
+                        if let Some(ed) = self.editor.as_mut() {
+                            ed.scope_ask = Some(ScopeFor::Delete);
+                        }
+                    } else {
+                        self.delete_event(ctx, id);
+                    }
                 }
             }
             Cmd::Copy => {

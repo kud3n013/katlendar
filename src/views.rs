@@ -1438,6 +1438,17 @@ impl App {
                 self.delete_event(&ctx, id);
                 ui.close();
             }
+            // one of a repeat's events: the rest of them may go too
+            if self.data.series_others(id) > 0 {
+                if m.item(ui, icons::TRASH, tr("Delete this and following"), true).clicked() {
+                    self.delete_from_series(&ctx, id, SeriesScope::Following);
+                    ui.close();
+                }
+                if m.item(ui, icons::TRASH, tr("Delete all events"), true).clicked() {
+                    self.delete_from_series(&ctx, id, SeriesScope::All);
+                    ui.close();
+                }
+            }
         }
         m.end(ui);
     }
