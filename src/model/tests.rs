@@ -980,6 +980,8 @@ fn new_tasks_go_to_the_picked_default_list() {
     d.lists.push(TaskList { id: 9, name: "Old".into(), ..Default::default() });
     d.tasks.push(Task { id: 1, list: 9, ..Default::default() });
     d.prefs.default_list = Some(7);
+    assert_eq!(d.removed_tasks_go(9), "Its tasks go to Work");
+    assert_eq!(d.removed_tasks_go(7), format!("Its tasks go to {}", d.prefs.inbox_name()));
     d.remove_own_list(9);
     assert_eq!(d.task(1).unwrap().list, 7);
     // and to the Inbox when it was the default

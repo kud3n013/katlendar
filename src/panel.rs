@@ -710,7 +710,7 @@ impl App {
             let synced = self.data.lists.iter().any(|l| l.id == lid && l.account.is_some());
             m.line(ui);
             let b = m.item_if(ui, !synced, icons::TRASH, tr("Remove"), true);
-            let b = b.on_hover_text(tr("Its tasks go to the Inbox")).on_disabled_hover_text(tr("This list comes from an account. It goes when it is switched off under Settings, Calendars."));
+            let b = b.on_hover_text(self.data.removed_tasks_go(lid)).on_disabled_hover_text(tr("This list comes from an account. It goes when it is switched off under Settings, Calendars."));
             if b.clicked() {
                 self.snapshot();
                 self.data.remove_own_list(lid);
