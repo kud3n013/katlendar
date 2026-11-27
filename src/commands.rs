@@ -446,12 +446,13 @@ impl App {
         self.snapshot();
         let (made, left) = self.data.plan_tasks_in(Self::now(), list);
         self.commit();
+        let planned = trn(made, "Planned 1 session", "Planned {} sessions", &[&made]);
         let msg = if made == 0 && left == 0 {
             tr("Nothing to plan").to_string()
         } else if left > 0 {
-            trf("Planned {} session(s); {} task(s) did not fit in the next {} days", &[&made, &left, &PLAN_SPAN_DAYS])
+            trf("{}; {} did not fit in the next {} days", &[&planned, &trn(left, "1 task", "{} tasks", &[&left]), &PLAN_SPAN_DAYS])
         } else {
-            trf("Planned {} session(s)", &[&made])
+            planned
         };
         self.say(ctx, msg, made > 0);
     }

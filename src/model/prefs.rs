@@ -1,6 +1,6 @@
 //! The settings and the views they choose between.
 
-use crate::strings::{tr, trf};
+use crate::strings::{tr, trn};
 use super::*;
 use chrono::{Datelike, Duration, NaiveDate, NaiveTime, Timelike};
 use serde::{Deserialize, Serialize};
@@ -18,10 +18,9 @@ impl View {
     pub fn label(&self) -> String {
         match self {
             View::Agenda => tr("Agenda").into(),
-            View::Days(1) => "1 day".into(),
-            View::Days(n) => trf("{} days", &[&n]),
+            View::Days(n) => trn(*n, "1 day", "{} days", &[n]),
             View::Week => tr("Week").into(),
-            View::TwoWeeks => "2 weeks".into(),
+            View::TwoWeeks => tr("2 weeks").into(),
             View::Month => tr("Month").into(),
         }
     }

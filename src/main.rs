@@ -17,7 +17,7 @@ mod platform;
 mod secrets;
 mod settings;
 mod strings;
-pub use strings::{later, tr, trf};
+pub use strings::{later, tr, trf, trn};
 mod sync;
 mod tz;
 mod update;

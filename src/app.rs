@@ -959,7 +959,7 @@ impl App {
             self.selected = None;
         }
         self.commit();
-        self.say(ctx, if n == 1 { tr("Event deleted").into() } else { trf("Deleted {} events", &[&n]) }, true);
+        self.say(ctx, trn(n, "Event deleted", "Deleted {} events", &[&n]), true);
     }
 
     pub fn delete_event(&mut self, ctx: &egui::Context, id: u64) {

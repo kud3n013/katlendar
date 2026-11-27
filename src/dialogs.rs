@@ -1,6 +1,6 @@
 //! Pop-up windows: editors, preferences, shortcuts, command bar, messages.
 
-use crate::strings::{tr, trf};
+use crate::strings::{tr, trf, trn};
 use crate::ids;
 use crate::repeat_ui;
 use crate::motion;
@@ -953,7 +953,7 @@ impl App {
                 }
                 self.data.events.push(ev);
                 if !times.is_empty() {
-                    self.say(ctx, trf("Added {} events", &[&(times.len() + 1)]), true);
+                    self.say(ctx, trn(times.len() + 1, "Added 1 event", "Added {} events", &[&(times.len() + 1)]), true);
                 }
             }
             self.selected = Some(id);
@@ -1905,7 +1905,7 @@ impl App {
                 self.data.events.push(copy);
             }
             if !copies.is_empty() {
-                self.say(ctx, trf("Added {} events", &[&copies.len()]), true);
+                self.say(ctx, trn(copies.len(), "Added 1 event", "Added {} events", &[&copies.len()]), true);
             }
             if let Some(slot) = self.data.event_mut(id) {
                 if !copies.is_empty() {

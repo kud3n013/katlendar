@@ -17,7 +17,11 @@ A new feature that has an events half and a tasks half gets both, built alike, a
 
 ## Settings pages
 
-Build settings rows from the helpers in `src/settings.rs`: `heading`, `row` (a named setting with its tooltip), `combo`, `add_row` (a name field with a "+ Add …" button) and `collection_top` (title, description, default picker, add row). When two pages need the same widget, it becomes a helper there.
+Build settings rows from the helpers in `src/settings.rs`: `heading`, `row` (a named setting with its tooltip), `combo`, `add_row` (a name field with a "+ Add …" button), `collection_top` (title, description, default picker, add row) and `row_lead` (the show box and colour button in front of a calendar's or list's name). When two pages need the same widget, it becomes a helper there.
+
+## Text
+
+A text a person reads goes through `tr`, or `trf` when values are filled in. A text that counts something goes through `trn`, so 1 reads as one ("1 open task", not "1 open tasks").
 
 ## Checks
 

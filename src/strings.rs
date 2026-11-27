@@ -1,9 +1,10 @@
 //! The words the app shows, made translatable.
 //!
-//! Every text a person reads goes through [`tr`], or [`trf`] when values are
-//! filled into it. The English text is written where it is used and is
-//! itself the key, as gettext does it: the code stays readable, and a
-//! translation is a table from those English texts to another language.
+//! Every text a person reads goes through [`tr`], [`trf`] when values are
+//! filled into it, or [`trn`] when it counts something, so 1 reads as one.
+//! The English text is written where it is used and is itself the key, as
+//! gettext does it: the code stays readable, and a translation is a table
+//! from those English texts to another language.
 //!
 //! To add a language: put a `CATALOG` of `(english, translated)` pairs in a
 //! file under `src/strings/` and list it in [`CATALOGS`]. Texts a catalog
@@ -65,6 +66,13 @@ pub fn trf(text: &'static str, values: &[&dyn Display]) -> String {
     fill(tr(text), values)
 }
 
+/// `one` when `n` is 1, else `many`, in the language in use, with `values`
+/// put in its `{}` places, as gettext's `ngettext` picks a form. `one` may
+/// leave the number out, as in "Event deleted".
+pub fn trn(n: impl TryInto<i64>, one: &'static str, many: &'static str, values: &[&dyn Display]) -> String {
+    fill(tr(if n.try_into().is_ok_and(|n| n == 1) { one } else { many }), values)
+}
+
 /// Puts `values` into `template`: `{}` takes the next one, `{n}` the nth.
 /// `{{` and `}}` stand for the braces themselves.
 fn fill(template: &str, values: &[&dyn Display]) -> String {
@@ -116,6 +124,13 @@ mod tests {
     }
 
     #[test]
+    fn one_reads_as_one() {
+        assert_eq!(trn(1usize, "1 open task", "{} open tasks", &[&1]), "1 open task");
+        assert_eq!(trn(3u8, "1 open task", "{} open tasks", &[&3]), "3 open tasks");
+        assert_eq!(trn(0i64, "{}: 1 event", "{}: {} events", &[&"Work", &0]), "Work: 0 events");
+    }
+
+    #[test]
     fn a_language_falls_back_to_its_base() {
         const DE: Catalog = &[("Undone", "Rückgängig gemacht")];
         let cats: &[(&str, Catalog)] = &[("de", DE)];
@@ -128,8 +143,33 @@ mod tests {
         assert_eq!(tr("Some text no catalog has"), "Some text no catalog has");
     }
 
-    /// Every text a catalog translates is still in the code, as a `tr` or
-    /// `trf` text, and keeps the number of places for values.
+    /// The string literals in `code`, in order, each with its quotes and
+    /// escapes as `{:?}` writes them.
+    fn literals(code: &str) -> impl Iterator<Item = &str> {
+        let mut rest = code;
+        std::iter::from_fn(move || {
+            let start = rest.find('"')?;
+            let body = &rest[start + 1..];
+            let mut escaped = false;
+            let (end, _) = body.char_indices().find(|&(_, c)| {
+                let close = c == '"' && !escaped;
+                escaped = c == '\\' && !escaped;
+                close
+            })?;
+            let lit = &rest[start..start + end + 2];
+            rest = &body[end + 1..];
+            Some(lit)
+        })
+    }
+
+    #[test]
+    fn literals_are_read_as_written() {
+        let code = r#"trn(n, "say \"hi\"", "a\\b") + "c""#;
+        assert_eq!(literals(code).collect::<Vec<_>>(), [r#""say \"hi\"""#, r#""a\\b""#, r#""c""#]);
+    }
+
+    /// Every text a catalog translates is still in the code, as a `tr`,
+    /// `trf`, `later` or `trn` text, and keeps the number of places for values.
     #[test]
     fn catalogs_match_the_code() {
         let mut code = String::new();
@@ -144,11 +184,14 @@ mod tests {
                 }
             }
         }
+        // a `trn` call gives its two texts right after the count
+        let counted: Vec<&str> = code.match_indices("trn(").flat_map(|(i, _)| literals(&code[i..]).take(2)).collect();
         let places = |s: &str| fill(s, &[]).matches('{').count();
         for (lang, cat) in CATALOGS {
             for (en, other) in cat.iter() {
                 let quoted = format!("{en:?}");
-                assert!(["tr(", "trf(", "later("].iter().any(|f| code.contains(&format!("{f}{quoted}"))), "{lang}: {en:?} is no longer in the code");
+                let used = ["tr(", "trf(", "later("].iter().any(|f| code.contains(&format!("{f}{quoted}"))) || counted.contains(&quoted.as_str());
+                assert!(used, "{lang}: {en:?} is no longer in the code");
                 assert_eq!(places(en), places(other), "{lang}: {en:?} and its translation have different places for values");
             }
         }
