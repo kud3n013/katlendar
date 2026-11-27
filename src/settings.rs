@@ -143,6 +143,29 @@ fn search_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) {
 }
 
 /// One settings line: the name on the left, its control in a wide box on the right.
+/// The name field and "+ Add …" button of a page that manages calendars,
+/// lists and the like, so each such page looks the same. `extra` puts more
+/// buttons after it. The trimmed name when one is added.
+fn add_row(ui: &mut egui::Ui, name: &mut String, hint: &str, button: &str, accent: Color32, extra: impl FnOnce(&mut egui::Ui)) -> Option<String> {
+    let mut added = None;
+    ui.horizontal(|ui| {
+        let r = ui.add(
+            egui::TextEdit::singleline(name)
+                .hint_text(hint)
+                .font(FontId::proportional(theme::size::UI))
+                .margin(Margin::symmetric(10, 8))
+                .desired_width((ui.available_width() - 330.0).clamp(120.0, 300.0)),
+        );
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let b = egui::Button::new(RichText::new(button).size(theme::size::UI).color(Color32::WHITE)).fill(accent).corner_radius(theme::RADIUS);
+        if (ui.add(b).clicked() || enter) && !name.trim().is_empty() {
+            added = Some(std::mem::take(name).trim().to_string());
+        }
+        extra(ui);
+    });
+    added
+}
+
 fn row(ui: &mut egui::Ui, label: &str, tip: &str, add: impl FnOnce(&mut egui::Ui)) {
     if !shown(ui, &[label, tip]) {
         return;
@@ -429,7 +452,7 @@ impl App {
         }
         let builder = egui::ViewportBuilder::default()
             .with_title(tr("Settings"))
-            .with_app_id("katlendar")
+            .with_app_id(crate::APP_ID)
             .with_inner_size([1060.0, 820.0])
             .with_min_inner_size([760.0, 480.0]);
         ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("settings"), builder, |ui, class| {
@@ -1024,34 +1047,20 @@ impl App {
         }
         ui.add_space(8.0);
         // add a calendar of one's own
-        ui.horizontal(|ui| {
-            let r = ui.add(
-                egui::TextEdit::singleline(&mut self.new_cal_name)
-                    .hint_text(tr("New calendar name"))
-                    .font(FontId::proportional(theme::size::UI))
-                    .margin(Margin::symmetric(10, 8))
-                    .desired_width((ui.available_width() - 330.0).clamp(120.0, 300.0)),
-            );
-            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let b = egui::Button::new(RichText::new("+ Add calendar").size(theme::size::UI).color(Color32::WHITE)).fill(self.pal.accent).corner_radius(theme::RADIUS);
-            if (ui.add(b).clicked() || enter) && !self.new_cal_name.trim().is_empty() {
-                self.snapshot();
-                let n = self.data.calendars.len();
-                let name = std::mem::take(&mut self.new_cal_name);
-                let id = self.data.new_id();
-                self.data.calendars.push(Calendar {
-                    id,
-                    name: name.trim().to_string(),
-                    color: EVENT_COLORS[(n * 3 + 1) % EVENT_COLORS.len()].0,
-                    visible: true,
-                    ..Default::default()
-                });
-                self.commit();
-            }
-            if ui.add(egui::Button::new(RichText::new(tr("Subscribe by link…")).size(theme::size::UI)).corner_radius(theme::RADIUS)).clicked() {
-                self.settings_page = Page::Calendars;
-            }
+        let mut subscribe = false;
+        let added = add_row(ui, &mut self.new_cal_name, tr("New calendar name"), tr("+ Add calendar"), self.pal.accent, |ui| {
+            subscribe = ui.add(egui::Button::new(RichText::new(tr("Subscribe by link…")).size(theme::size::UI)).corner_radius(theme::RADIUS)).clicked();
         });
+        if let Some(name) = added {
+            self.snapshot();
+            let n = self.data.calendars.len();
+            let id = self.data.new_id();
+            self.data.calendars.push(Calendar { id, name, color: EVENT_COLORS[(n * 3 + 1) % EVENT_COLORS.len()].0, visible: true, ..Default::default() });
+            self.commit();
+        }
+        if subscribe {
+            self.settings_page = Page::Calendars;
+        }
         ui.add_space(10.0);
         let own_count = self.data.calendars.iter().filter(|c| c.is_local()).count();
         let counts: Vec<usize> = self.data.calendars.iter().map(|c| self.data.events.iter().filter(|e| e.calendar == c.id).count()).collect();
@@ -1228,7 +1237,7 @@ impl App {
     fn page_lists(&mut self, ui: &mut egui::Ui) {
         if finding(ui) {
             let names: Vec<&str> = self.data.lists.iter().map(|l| l.name.as_str()).collect();
-            let words = [&["task list", "inbox", "icon", "colour", "color", "rename", "add", "remove", "delete", "new list"][..], &names].concat();
+            let words = [&["task list", "inbox", "icon", "colour", "color", "rename", "add", "remove", "delete", "new list", "default"][..], &names].concat();
             page_result(ui, Page::Lists, tr("Manage task lists"), tr("Rename task lists, change their colour and icon, add or remove them"), &words);
             return;
         }
@@ -1236,23 +1245,6 @@ impl App {
         heading(ui, tr("Task lists"));
         ui.add(egui::Label::new(RichText::new(tr("Rename your task lists, change their colour and icon, add new ones or remove them.")).size(theme::size::UI).color(muted)).wrap());
         ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            let r = ui.add(
-                egui::TextEdit::singleline(&mut self.new_list_name)
-                    .hint_text(tr("New list name"))
-                    .font(FontId::proportional(theme::size::UI))
-                    .margin(Margin::symmetric(10, 8))
-                    .desired_width((ui.available_width() - 330.0).clamp(120.0, 300.0)),
-            );
-            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let b = egui::Button::new(RichText::new("+ Add list").size(theme::size::UI).color(Color32::WHITE)).fill(self.pal.accent).corner_radius(theme::RADIUS);
-            if (ui.add(b).clicked() || enter) && !self.new_list_name.trim().is_empty() {
-                self.snapshot();
-                let name = std::mem::take(&mut self.new_list_name);
-                self.new_list(name.trim());
-            }
-        });
-        ui.add_space(10.0);
         // where a task goes when no list is picked for it
         let mut default = self.data.default_list();
         let was = default;
@@ -1262,6 +1254,11 @@ impl App {
         if default != was {
             self.data.prefs.default_list = Some(default).filter(|id| *id != 0);
             self.commit();
+        }
+        ui.add_space(8.0);
+        if let Some(name) = add_row(ui, &mut self.new_list_name, tr("New list name"), tr("+ Add list"), self.pal.accent, |_| {}) {
+            self.snapshot();
+            self.new_list(&name);
         }
         ui.add_space(10.0);
         let ids: Vec<u64> = std::iter::once(0).chain(self.data.lists.iter().map(|l| l.id)).collect();
@@ -1277,7 +1274,7 @@ impl App {
                     ui.label(RichText::new("always there").size(theme::size::CAPTION).color(muted));
                 } else {
                     let b = egui::Button::new(RichText::new(tr("Remove")).size(theme::size::BODY).color(theme::DANGER)).fill(mix(side, text, 0.07)).corner_radius(theme::BUTTON_RADIUS);
-                    let resp = ui.add_enabled(!synced, b).on_hover_text(tr("Its tasks go to the Inbox"));
+                    let resp = ui.add_enabled(!synced, b).on_hover_text(self.data.removed_tasks_go(lid));
                     if resp.on_disabled_hover_text(tr("Untick it under Integrations to stop syncing it, or sign out of its account there")).clicked() {
                         remove = Some(lid);
                     }

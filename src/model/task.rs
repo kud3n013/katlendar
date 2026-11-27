@@ -151,6 +151,12 @@ impl Data {
     }
     /// Removes one of one's own lists; its tasks go to the default list,
     /// or the Inbox when it was the default.
+    /// Where removing list `id` sends its tasks, said for its Remove button.
+    pub fn removed_tasks_go(&self, id: u64) -> String {
+        let to = Some(self.default_list()).filter(|d| *d != id).unwrap_or(0);
+        crate::strings::trf("Its tasks go to {}", &[&self.list_title(to)])
+    }
+
     pub fn remove_own_list(&mut self, id: u64) {
         self.lists.retain(|l| l.id != id);
         let to = self.default_list();

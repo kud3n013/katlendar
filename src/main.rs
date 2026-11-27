@@ -27,6 +27,10 @@ mod fonts;
 mod views;
 mod worker;
 
+/// Window class (Wayland app_id). A debug build gets its own, so the window manager can tell
+/// it from the installed app (Hyprland sends `katlendar` to the agenda overlay).
+pub const APP_ID: &str = if cfg!(debug_assertions) { "katlendar-debug" } else { "katlendar" };
+
 mod app;
 mod commands;
 mod frame;
@@ -140,7 +144,7 @@ fn main() {
     }
     let mut vb = egui::ViewportBuilder::default()
         .with_title("Katlendar")
-        .with_app_id("katlendar")
+        .with_app_id(APP_ID)
         .with_inner_size([1400.0, 860.0])
         .with_min_inner_size([360.0, 480.0]);
     if let Some(icon) = app_icon() {
