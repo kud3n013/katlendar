@@ -24,7 +24,7 @@ bcrypt = "0.19.3"
 num-bigint = "0.5.1"
 base64 = "0.23.1"
 getrandom = "0.4.3"
-rand = "0.8"
+rand = "0.10"
 epaint = { version = "=0.37.0", features = ["color_fonts"] }
 fontique = "0.11"
 
