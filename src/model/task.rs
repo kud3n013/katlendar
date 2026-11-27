@@ -87,6 +87,10 @@ pub struct TaskList {
 pub const INBOX_COLOR: [u8; 3] = [0x35, 0x85, 0xe1];
 
 impl Data {
+    /// A list's colour: list 0, or one that is gone, is the Inbox.
+    pub fn color_of_list(&self, id: u64) -> [u8; 3] {
+        self.lists.iter().find(|l| l.id == id).map_or_else(|| self.prefs.inbox_color.unwrap_or(INBOX_COLOR), |l| l.color)
+    }
     /// A list's name, colour and icon as kept; list 0 is the Inbox, whose
     /// name is empty until it is renamed. A list with no icon picked shows
     /// its own default.

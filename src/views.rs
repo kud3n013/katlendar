@@ -855,6 +855,13 @@ impl App {
                 if *draft && !editing && self.create.as_ref().is_none_or(|c| c.kind == CreateKind::Task) {
                     task = Some((0, false));
                 }
+                // a new task's block takes the colour of the list it goes in
+                let new_task = self.editor.as_ref().filter(|ed| *draft && ed.ev.id == e.id).and_then(|ed| ed.task.as_ref());
+                let draft_color = match (new_task, *draft && task.is_some()) {
+                    (Some(t), _) => e.color.unwrap_or_else(|| self.data.block_color(Some(&t.task), e.calendar)),
+                    (None, true) => e.color.unwrap_or_else(|| self.data.color_of_list(self.create.as_ref().map_or_else(|| self.data.default_list(), |c| c.task.list))),
+                    (None, false) => self.data.event_color(e),
+                };
                 let mut target = Rect::from_min_max(pos2(x, top_y), pos2(x + width * cw, bottom_y));
                 if !*draft {
                     let dragging = matches!(&self.drag, Some(Drag::Move { id, .. }) | Some(Drag::Resize { id }) if *id == e.id);
@@ -881,7 +888,7 @@ impl App {
                             tr("New Event").into()
                         },
                         sub: format!("{} – {}", p.fmt_time(e.start.time()), p.fmt_time(e.end.time())),
-                        color: rgb(self.data.event_color(e)),
+                        color: rgb(draft_color),
                         task,
                         draft: *draft,
                         past: p.dim_past && e.end < now,

@@ -755,19 +755,37 @@ impl App {
                 ui.add_space(4.0);
                 let label = |ui: &mut egui::Ui, t: &str| ui.label(RichText::new(t).color(muted));
                 egui::Grid::new("creategrid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                    // every calendar that takes changes, one's own and synced ones
-                    label(ui, tr("Calendar"));
-                    let cname = |id: u64| self.data.calendar(id).map(|c| c.name.clone()).unwrap_or_default();
-                    egui::ComboBox::from_id_salt("ccal").selected_text(cname(c.ev.calendar)).height(320.0).show_ui(ui, |ui| {
-                        for cal in self.data.calendars.iter().filter(|cal| cal.writable()) {
-                            ui.selectable_value(&mut c.ev.calendar, cal.id, RichText::new(format!("{} {}", icons::CIRCLE, cal.name)).color(rgb(cal.color)));
-                        }
-                    });
-                    ui.end_row();
+                    // a task leads with its list, where an event has its calendar,
+                    // and takes its colour from it, as in the task editor
+                    if is_task {
+                        label(ui, tr("List"));
+                        let items = self.list_items(true);
+                        ui.horizontal(|ui| {
+                            pick_one(ui, "clist", &items, &mut c.task.list);
+                            if let Some(name) = add_button(ui, "clist", tr("New list")) {
+                                new_list = Some(name);
+                            }
+                        });
+                        ui.end_row();
 
-                    label(ui, tr("Colour"));
-                    color_row(ui, cal_color, &mut c.ev.color);
-                    ui.end_row();
+                        label(ui, tr("Colour"));
+                        swatches(ui, self.data.color_of_list(c.task.list), tr("List colour"), &mut c.ev.color);
+                        ui.end_row();
+                    } else {
+                        // every calendar that takes changes, one's own and synced ones
+                        label(ui, tr("Calendar"));
+                        let cname = |id: u64| self.data.calendar(id).map(|c| c.name.clone()).unwrap_or_default();
+                        egui::ComboBox::from_id_salt("ccal").selected_text(cname(c.ev.calendar)).height(320.0).show_ui(ui, |ui| {
+                            for cal in self.data.calendars.iter().filter(|cal| cal.writable()) {
+                                ui.selectable_value(&mut c.ev.calendar, cal.id, RichText::new(format!("{} {}", icons::CIRCLE, cal.name)).color(rgb(cal.color)));
+                            }
+                        });
+                        ui.end_row();
+
+                        label(ui, tr("Colour"));
+                        color_row(ui, cal_color, &mut c.ev.color);
+                        ui.end_row();
+                    }
 
                     // hours, in 5-minute steps, within the block's day
                     label(ui, tr("Time"));
@@ -796,16 +814,6 @@ impl App {
                     repeat_ui::repeat_rows(ui, "crep", &mut c.repeat, &mut c.ends, day, look, is_task, &label, None, ends_tip);
 
                     if is_task {
-                        label(ui, tr("List"));
-                        let items = self.list_items(true);
-                        ui.horizontal(|ui| {
-                            pick_one(ui, "clist", &items, &mut c.task.list);
-                            if let Some(name) = add_button(ui, "clist", tr("New list")) {
-                                new_list = Some(name);
-                            }
-                        });
-                        ui.end_row();
-
                         label(ui, tr("Tags"));
                         ui.horizontal(|ui| {
                             let text = ui.visuals().text_color();
@@ -852,7 +860,8 @@ impl App {
                     }
 
                     label(ui, tr("Location"));
-                    let (open, provider) = cal_maps.get(&c.ev.calendar).copied().unwrap_or((p.open_places_in, p.map_provider));
+                    // a task's place opens as the task editor opens it
+                    let (open, provider) = cal_maps.get(&c.ev.calendar).filter(|_| !is_task).copied().unwrap_or((p.open_places_in, p.map_provider));
                     place_field(ui, "create", &mut c.ev.place, open, provider);
                     ui.end_row();
 
@@ -919,10 +928,15 @@ impl App {
                     ev.title = tr("New task").into();
                 }
                 let task_id = self.data.new_id();
+                // the block goes where task sessions go, and the colour picked
+                // is the task's, so its other blocks share it
+                ev.calendar = self.data.task_calendar();
+                let color = ev.color.take().or(c.task.color);
                 self.data.tasks.insert(
                     0,
                     Task {
                         id: task_id,
+                        color,
                         title: ev.title.clone(),
                         notes: ev.notes.clone(),
                         place: ev.place.clone(),
@@ -2039,7 +2053,7 @@ impl App {
             pick_one(ui, "tlist", &items, &mut ed.task.list);
             ui.end_row();
             editor_label(ui, tr("Colour"), muted);
-            let base = self.data.list_color(Some(&ed.task), self.data.default_calendar());
+            let base = self.data.color_of_list(ed.task.list);
             swatches(ui, base, tr("List colour"), &mut ed.task.color);
             ui.end_row();
             editor_label(ui, tr("Tags"), muted);
@@ -2420,6 +2434,57 @@ mod tests {
         assert_eq!(app.editor.as_ref().unwrap().task.as_ref().unwrap().task.list, id);
         app.open_create(App::now(), 30, egui::Rect::NOTHING);
         assert_eq!(app.create.as_ref().unwrap().task.list, id);
+    }
+
+    /// The block window drawn headless with its `kind` tab open, on a
+    /// block made with the default list set to a new "Work".
+    fn create_window(kind: CreateKind) -> egui_kittest::Harness<'static, App> {
+        let mut app = app_with_event();
+        let work = app.new_list("Work");
+        app.data.prefs.default_list = Some(work);
+        let anchor = egui::Rect::from_min_size(egui::pos2(300.0, 200.0), egui::vec2(120.0, 40.0));
+        app.open_create(App::now(), 30, anchor);
+        app.create.as_mut().unwrap().kind = kind;
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1100.0, 900.0))
+            .with_context_setup(|ctx| crate::fonts::apply(ctx, ""))
+            .with_accessibility_check(false)
+            .build_ui_state(|ui, app: &mut App| app.dlg_create(ui.ctx()), app);
+        h.run_steps(3);
+        h
+    }
+
+    /// The Event and Task tabs are siblings: the task's list sits where the
+    /// event's calendar does, and the colour and time rows below it line up.
+    #[test]
+    fn the_event_and_task_tabs_line_up() {
+        use egui_kittest::kittest::Queryable;
+        let ys = |kind, labels: [&str; 3]| -> Vec<f32> {
+            let h = create_window(kind);
+            labels.iter().map(|l| h.get_by_label(l).rect().min.y).collect()
+        };
+        let event = ys(CreateKind::Event, ["Calendar", "Colour", "Time"]);
+        let task = ys(CreateKind::Task, ["List", "Colour", "Time"]);
+        for (a, b) in event.iter().zip(&task) {
+            assert!((a - b).abs() < 1.0, "the tabs don't line up: {event:?} against {task:?}");
+        }
+        assert!(create_window(CreateKind::Task).query_by_label("Calendar").is_none(), "a task picks its list, not a calendar");
+    }
+
+    /// A task made on the calendar looks like its list, the default one,
+    /// and its block goes where task sessions go.
+    #[test]
+    fn a_task_made_on_the_calendar_takes_its_lists_colour() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = create_window(CreateKind::Task);
+        h.get_by_label("Save").click();
+        h.run_steps(3);
+        let app = h.state();
+        let task = &app.data.tasks[0];
+        assert_eq!(Some(task.list), app.data.prefs.default_list);
+        let block = app.data.events.iter().find(|e| e.task_id == Some(task.id)).unwrap();
+        assert_eq!(block.calendar, app.data.task_calendar());
+        assert_eq!(app.data.event_color(block), app.data.color_of_list(task.list));
     }
 
     #[test]
