@@ -60,6 +60,30 @@ fn own_dir(base: &Path) -> PathBuf {
     dir
 }
 
+/// Another copy of the app has the data open.
+#[derive(Debug, PartialEq)]
+pub struct AlreadyOpen;
+
+/// Takes the lock that keeps a second copy of the app off the same data.
+/// Each copy writes all it holds whenever something changes, so two would
+/// undo each other's changes, settings too. The lock lasts while the file
+/// is kept; None when the disk can't lock, and the app runs as before.
+pub fn lock_data() -> Result<Option<std::fs::File>, AlreadyOpen> {
+    lock_at(&data_path().with_file_name("katlendar.lock"))
+}
+
+pub(super) fn lock_at(p: &Path) -> Result<Option<std::fs::File>, AlreadyOpen> {
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let Ok(f) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(p) else { return Ok(None) };
+    match f.try_lock() {
+        Ok(()) => Ok(Some(f)),
+        Err(std::fs::TryLockError::WouldBlock) => Err(AlreadyOpen),
+        Err(std::fs::TryLockError::Error(_)) => Ok(None),
+    }
+}
+
 /// Where the settings are kept:
 /// $XDG_CONFIG_HOME/katlendar/config.json, usually ~/.config/katlendar/
 /// (beside the data on Windows and macOS).

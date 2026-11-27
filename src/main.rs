@@ -57,6 +57,24 @@ fn app_icon() -> Option<egui::IconData> {
     Some(egui::IconData { rgba: img.into_raw(), width, height })
 }
 
+/// A small window saying another copy is open, in place of the app.
+fn already_open() {
+    let vb = egui::ViewportBuilder::default().with_title("Katlendar").with_app_id(APP_ID).with_inner_size([440.0, 150.0]).with_resizable(false);
+    let options = eframe::NativeOptions { viewport: vb, ..Default::default() };
+    let _ = eframe::run_ui_native("Katlendar", options, |ui, _| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(strings::tr("Katlendar is already open")).font(theme::bold(18.0)));
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(strings::tr("Use the window that is open. Two copies would overwrite each other's changes.")).wrap());
+            ui.add_space(10.0);
+            if ui.button(strings::tr("OK")).clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        });
+    });
+}
+
 fn main() {
     let mut shot = None;
     let mut args = std::env::args().skip(1);
@@ -142,6 +160,18 @@ fn main() {
             }
         }
     }
+    // two copies would overwrite each other's changes; a picture saves nothing
+    let _lock = if shot.is_none() {
+        match model::lock_data() {
+            Ok(lock) => lock,
+            Err(model::AlreadyOpen) => {
+                already_open();
+                return;
+            }
+        }
+    } else {
+        None
+    };
     let mut vb = egui::ViewportBuilder::default()
         .with_title("Katlendar")
         .with_app_id(APP_ID)
