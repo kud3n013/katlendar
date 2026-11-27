@@ -882,7 +882,7 @@ impl App {
                 id,
                 start,
                 end: start + Duration::minutes(mins),
-                calendar: self.data.default_calendar(),
+                calendar: self.data.task_calendar(),
                 task_id: Some(task.id),
                 ..Default::default()
             },

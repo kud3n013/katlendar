@@ -655,7 +655,7 @@ fn new_events_start_in_the_picked_default_calendar() {
 }
 
 #[test]
-fn a_block_takes_its_list_colour_else_its_calendars() {
+fn a_task_block_takes_its_list_colour_and_an_event_its_calendars() {
     let mut d = empty();
     let cal = d.first_own_calendar();
     let cal_col = d.calendar_color(cal);
@@ -664,12 +664,18 @@ fn a_block_takes_its_list_colour_else_its_calendars() {
     d.tasks.push(Task { id: 2, list: 0, ..Default::default() });
     let block = |task| Event { task_id: Some(task), calendar: cal, ..Default::default() };
     assert_eq!(d.event_color(&block(1)), [1, 2, 3]);
-    // the Inbox is no list: straight to the calendar
-    assert_eq!(d.event_color(&block(2)), cal_col);
-    // a block's own colour comes first; with its calendar gone, the main one
+    // the Inbox is a list too, with its own colour
+    assert_eq!(d.event_color(&block(2)), INBOX_COLOR);
+    d.prefs.inbox_color = Some([5, 5, 5]);
+    assert_eq!(d.event_color(&block(2)), [5, 5, 5]);
+    // a block's own colour comes first, then its task's
     assert_eq!(d.event_color(&Event { color: Some([9, 9, 9]), ..block(1) }), [9, 9, 9]);
+    d.tasks[1].color = Some([8, 8, 8]);
+    assert_eq!(d.event_color(&block(2)), [8, 8, 8]);
+    // an event that is no task's takes its calendar's; with that gone, the main one
+    assert_eq!(d.event_color(&Event { task_id: None, ..block(1) }), cal_col);
     d.prefs.main_color = Some([7, 7, 7]);
-    assert_eq!(d.event_color(&Event { calendar: 999, ..block(2) }), [7, 7, 7]);
+    assert_eq!(d.event_color(&Event { calendar: 999, task_id: None, ..block(1) }), [7, 7, 7]);
 }
 
 #[test]
