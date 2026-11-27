@@ -140,6 +140,37 @@ impl Data {
     pub fn event_mut(&mut self, id: u64) -> Option<&mut Event> {
         self.events.iter_mut().find(|e| e.id == id)
     }
+    /// How many other events were laid out from the same repeat as the
+    /// event `id`.
+    pub fn series_others(&self, id: u64) -> usize {
+        let Some(s) = self.event(id).and_then(|e| e.series) else { return 0 };
+        self.events.iter().filter(|e| e.series == Some(s) && e.id != id).count()
+    }
+    /// Saves `new`, the edited event `new.id` that was `base`, to the
+    /// events of its repeat that `scope` names. "This and following" makes
+    /// them a repeat of their own, so a later edit of the earlier ones
+    /// leaves them be.
+    pub fn save_to_series(&mut self, base: &Event, new: &Event, scope: SeriesScope) {
+        let Some(series) = self.event(new.id).and_then(|e| e.series) else { return };
+        let from = base.start.date();
+        let split = (scope == SeriesScope::Following).then(|| self.new_id());
+        for e in self.events.iter_mut().filter(|e| e.series == Some(series) && e.id != new.id) {
+            let reached = match scope {
+                SeriesScope::This => false,
+                SeriesScope::All => true,
+                SeriesScope::Following => e.start.date() >= from,
+            };
+            if reached {
+                e.take_series_edits(base, new);
+                if split.is_some() {
+                    e.series = split;
+                }
+            }
+        }
+        if let (Some(s), Some(e)) = (split, self.event_mut(new.id)) {
+            e.series = Some(s);
+        }
+    }
     pub fn task_is_scheduled(&self, id: u64) -> bool {
         self.events.iter().any(|e| e.task_id == Some(id))
     }

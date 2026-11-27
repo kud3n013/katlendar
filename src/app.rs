@@ -29,6 +29,9 @@ pub struct EventEdit {
     /// saving lays the event out again on these days, until `ends`
     pub repeat: Repeat,
     pub ends: Ends,
+    /// Save was pressed on one of a repeat's events: the buttons ask which
+    /// of them the edit is for
+    pub scope_ask: bool,
 }
 
 /// What a block drawn on the calendar becomes.
@@ -855,6 +858,7 @@ impl App {
             task: None,
             repeat: Repeat::None,
             ends: Ends::Never,
+            scope_ask: false,
         });
         self.selected = None;
     }
@@ -880,6 +884,7 @@ impl App {
             task: Some(TaskEdit::of(&task)),
             repeat: Repeat::None,
             ends: Ends::Never,
+            scope_ask: false,
         });
         self.create = None;
         self.close_inline_editor();
@@ -895,7 +900,7 @@ impl App {
     pub fn edit_event_at(&mut self, id: u64, anchor_rect: Option<egui::Rect>) {
         if let Some(ev) = self.shown_event(id) {
             let task = ev.task_id.and_then(|t| self.data.task(t)).map(TaskEdit::of);
-            self.editor = Some(EventEdit { base: Some(ev.clone()), ev, is_new: false, focus: true, anchor_rect, task, repeat: Repeat::None, ends: Ends::Never });
+            self.editor = Some(EventEdit { base: Some(ev.clone()), ev, is_new: false, focus: true, anchor_rect, task, repeat: Repeat::None, ends: Ends::Never, scope_ask: false });
             self.create = None;
             self.selected = Some(id);
         }
@@ -1047,6 +1052,7 @@ impl App {
         // a copy of a synced or subscribed event is a new event of one's own
         e.detach();
         e.skipped = false;
+        e.series = None;
         e.calendar = self.data.writable_or_own(e.calendar);
         let len = src.end - src.start;
         let day_shift = Duration::days((at.date() - src.start.date()).num_days());

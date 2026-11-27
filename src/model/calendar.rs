@@ -178,6 +178,21 @@ pub struct Event {
     /// its own buffer time, in place of its calendar's; kept in this app only
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub buffer: Option<EventBuffer>,
+    /// the repeat it was laid out from: the copies one repeat made share
+    /// it, so an edit can reach the rest of them. Kept in this app only
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<u64>,
+}
+
+/// Which events of a repeat an edit reaches.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SeriesScope {
+    /// the one being edited
+    This,
+    /// it and the ones after it, which become a repeat of their own
+    Following,
+    /// every one of them
+    All,
 }
 
 impl Event {
@@ -195,6 +210,22 @@ impl Event {
         self.place = n.place;
         self.side_notes = n.side_notes;
         self.buffer = n.buffer;
+    }
+    /// Takes what was changed from `base` to `new` into another event of
+    /// the same repeat: the fields that changed, and for a change of time
+    /// the new clock time and length, on its own day moved by as many days
+    /// as the edited one moved. What it had of its own otherwise stays.
+    pub fn take_series_edits(&mut self, base: &Event, new: &Event) {
+        macro_rules! take {
+            ($($f:ident),*) => { $( if new.$f != base.$f { self.$f = new.$f.clone(); } )* };
+        }
+        take!(title, color, calendar, notes, place, side_notes, buffer);
+        if (new.start, new.end, new.all_day) != (base.start, base.end, base.all_day) {
+            let day = self.start.date() + (new.start.date() - base.start.date());
+            self.all_day = new.all_day;
+            self.start = day.and_time(new.start.time());
+            self.end = self.start + (new.end - new.start);
+        }
     }
     /// Forgets where the event lives on a server: it becomes a new event
     /// of one's own.
