@@ -1,7 +1,7 @@
 //! How a task's due date or an event comes again: the patterns, the
 //! custom "every N days, weeks, months or years" rule, and how it ends.
 
-use crate::strings::{tr, trf};
+use crate::strings::{tr, trf, trn};
 use chrono::{Datelike, Duration, Months, NaiveDate, Weekday};
 use serde::{Deserialize, Serialize};
 
@@ -90,8 +90,7 @@ impl Ends {
         match self {
             Ends::Never => String::new(),
             Ends::On(d) => trf("until {}", &[&d.format("%b %-d, %Y")]),
-            Ends::After(1) => tr("once").into(),
-            Ends::After(n) => trf("{} times", &[n]),
+            Ends::After(n) => trn(*n, "once", "{} times", &[n]),
         }
     }
     /// What is left of it once the first time has gone by and the next is

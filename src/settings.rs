@@ -1,6 +1,6 @@
 //! The settings window: a window of its own with a list of pages on the left.
 
-use crate::strings::{later, tr, trf};
+use crate::strings::{later, tr, trf, trn};
 use crate::ids;
 use crate::motion;
 use crate::theme;
@@ -142,7 +142,6 @@ fn search_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) {
     }
 }
 
-/// One settings line: the name on the left, its control in a wide box on the right.
 /// The name field and "+ Add …" button of a page that manages calendars,
 /// lists and the like, so each such page looks the same. `extra` puts more
 /// buttons after it. The trimmed name when one is added.
@@ -166,6 +165,28 @@ fn add_row(ui: &mut egui::Ui, name: &mut String, hint: &str, button: &str, accen
     added
 }
 
+/// The front of a calendar's or task list's row: its show box, or the room
+/// for one where there is none, then the button that opens its colour, so
+/// the names after it start at the same place on both pages. The caller
+/// draws the colour into the rectangle given back.
+fn row_lead(ui: &mut egui::Ui, shown: Option<&mut bool>, hover: Color32) -> (egui::Rect, egui::Response) {
+    let s = ui.spacing().interact_size.y;
+    match shown {
+        Some(v) => {
+            ui.add_sized([s, s], egui::Checkbox::without_text(v)).on_hover_text(tr("Show on the calendar"));
+        }
+        None => {
+            ui.allocate_exact_size(vec2(s, s), Sense::hover());
+        }
+    }
+    let (r, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
+    if resp.hovered() {
+        crate::fill_squircle(ui.painter(), r, 8.0, hover);
+    }
+    (r, resp)
+}
+
+/// One settings line: the name on the left, its control in a wide box on the right.
 fn row(ui: &mut egui::Ui, label: &str, tip: &str, add: impl FnOnce(&mut egui::Ui)) {
     if !shown(ui, &[label, tip]) {
         return;
@@ -745,7 +766,7 @@ impl App {
         });
         divider(ui, border);
         row(ui, tr("Undo grace period"), "", |ui| {
-            let opts: Vec<(u32, String)> = UNDO_CHOICES.iter().map(|s| (*s, if *s == 0 { tr("Disabled").into() } else { trf("{} seconds", &[&s]) })).collect();
+            let opts: Vec<(u32, String)> = UNDO_CHOICES.iter().map(|s| (*s, if *s == 0 { tr("Disabled").into() } else { trn(*s, "1 second", "{} seconds", &[&s]) })).collect();
             combo(ui, "ug", &mut p.undo_grace_s, &opts);
         });
         divider(ui, border);
@@ -1088,7 +1109,8 @@ impl App {
             let subscribed = !c.is_local();
             let synced = c.account.is_some();
             let cid = c.id;
-            let what = if synced && c.read_only { "from an account, read-only".to_string() } else if synced { format!("from an account, {} events", counts[i]) } else if subscribed { "subscribed, read-only".to_string() } else { trf("{} events", &[&counts[i]]) };
+            let events = trn(counts[i], "1 event", "{} events", &[&counts[i]]);
+            let what = if synced && c.read_only { tr("from an account, read-only").to_string() } else if synced { trf("from an account, {}", &[&events]) } else if subscribed { tr("subscribed, read-only").to_string() } else { events };
             // the buttons first; the name takes what is left
             ui.allocate_ui_with_layout(vec2(ui.available_width(), 52.0), Layout::right_to_left(Align::Center), |ui| {
                 {
@@ -1096,7 +1118,7 @@ impl App {
                         if ui.add(egui::Button::new(RichText::new(tr("Cancel")).size(theme::size::BODY)).corner_radius(theme::BUTTON_RADIUS)).clicked() {
                             ask = Some(None);
                         }
-                        let label = if subscribed { tr("Unsubscribe").to_string() } else { trf("Remove with its {} events", &[&counts[i]]) };
+                        let label = if subscribed { tr("Unsubscribe").to_string() } else { trn(counts[i], "Remove with its event", "Remove with its {} events", &[&counts[i]]) };
                         if ui.add(egui::Button::new(RichText::new(label).size(theme::size::BODY).color(Color32::WHITE)).fill(theme::DANGER).corner_radius(theme::BUTTON_RADIUS)).clicked() {
                             remove = Some(cid);
                         }
@@ -1119,9 +1141,8 @@ impl App {
                     ui.label(RichText::new(what).size(theme::size::CAPTION).color(muted));
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.checkbox(&mut c.visible, "").on_hover_text(tr("Show on the calendar"));
                     // colour: a dot that opens the palette
-                    let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
+                    let (r, resp) = row_lead(ui, Some(&mut c.visible), mix(side, text, 0.08));
                     ui.painter().circle_filled(r.center(), 9.0, rgb(c.color));
                     let resp = resp.on_hover_text(tr("Colour"));
                     egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClick).show(|ui| {
@@ -1137,7 +1158,13 @@ impl App {
                         });
                     });
                     let w = (ui.available_width() - 8.0).clamp(60.0, 280.0);
-                    ui.add(egui::TextEdit::singleline(&mut c.name).font(FontId::proportional(theme::size::LARGE)).desired_width(w).id_salt(("calname", cid)));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut c.name)
+                            .hint_text(RichText::new(tr("Calendar name")).size(theme::size::LARGE))
+                            .font(FontId::proportional(theme::size::LARGE))
+                            .desired_width(w)
+                            .id_salt(("calname", cid)),
+                    );
                 });
             });
             let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
@@ -1289,11 +1316,12 @@ impl App {
             let (mut name, color, icon) = self.data.list_look(lid);
             let synced = self.data.lists.iter().any(|l| l.id == lid && l.account.is_some());
             let count = self.data.tasks.iter().filter(|t| t.list == lid && !t.done).count();
-            let what = if synced { format!("from an account, {count} open tasks") } else { trf("{} open tasks", &[&count]) };
+            let open = trn(count, "1 open task", "{} open tasks", &[&count]);
+            let what = if synced { trf("from an account, {}", &[&open]) } else { open };
             // the button first; the name takes what is left
             ui.allocate_ui_with_layout(vec2(ui.available_width(), 52.0), Layout::right_to_left(Align::Center), |ui| {
                 if lid == 0 {
-                    ui.label(RichText::new("always there").size(theme::size::CAPTION).color(muted));
+                    ui.label(RichText::new(tr("always there")).size(theme::size::CAPTION).color(muted));
                 } else {
                     let b = egui::Button::new(RichText::new(tr("Remove")).size(theme::size::BODY).color(theme::DANGER)).fill(mix(side, text, 0.07)).corner_radius(theme::BUTTON_RADIUS);
                     let resp = ui.add_enabled(!synced, b).on_hover_text(self.data.removed_tasks_go(lid));
@@ -1305,11 +1333,8 @@ impl App {
                     ui.label(RichText::new(what).size(theme::size::CAPTION).color(muted));
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                // the ring or icon opens colours and icons
-                let (r, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
-                if resp.hovered() {
-                    crate::fill_squircle(ui.painter(), r, 8.0, mix(side, text, 0.08));
-                }
+                // the ring or icon opens colours and icons; a list has no show box
+                let (r, resp) = row_lead(ui, None, mix(side, text, 0.08));
                 if icon.is_empty() {
                     ui.painter().circle_stroke(r.center(), 6.5, Stroke::new(2.0, rgb(color)));
                 } else {
@@ -1322,7 +1347,7 @@ impl App {
                     self.list_fields(ui, lid, false, false, &mut snapped);
                 });
                 let edit = egui::TextEdit::singleline(&mut name)
-                    .hint_text(if lid == 0 { tr("Inbox") } else { tr("List name") })
+                    .hint_text(RichText::new(if lid == 0 { tr("Inbox") } else { tr("List name") }).size(theme::size::LARGE))
                     .font(FontId::proportional(theme::size::LARGE))
                     .desired_width((ui.available_width() - 8.0).clamp(60.0, 280.0))
                     .id_salt(("listname", lid));
@@ -1408,9 +1433,9 @@ impl App {
                     apply = Some((vec![u.name.clone()], None));
                 }
                 if ui.available_width() > 300.0 {
-                    let mut what = if u.tasks == 1 { tr("1 task").to_string() } else { trf("{} tasks", &[&u.tasks]) };
+                    let mut what = trn(u.tasks, "1 task", "{} tasks", &[&u.tasks]);
                     if u.frames > 0 {
-                        let f = if u.frames == 1 { tr("1 frame").to_string() } else { trf("{} frames", &[&u.frames]) };
+                        let f = trn(u.frames, "1 frame", "{} frames", &[&u.frames]);
                         what += &format!(", {f}");
                     }
                     ui.label(RichText::new(what).size(theme::size::CAPTION).color(muted));
@@ -1466,7 +1491,7 @@ impl App {
                 (None, 1) => trf("Removed #{}", &[&from[0]]),
                 (None, k) => trf("Removed {} tags", &[&k]),
             };
-            self.say(&ctx, format!("{what} · {}", if n == 1 { tr("1 task changed").to_string() } else { trf("{} tasks changed", &[&n]) }), true);
+            self.say(&ctx, format!("{what} · {}", trn(n, "1 task changed", "{} tasks changed", &[&n])), true);
             self.tag_sel.clear();
             self.tag_to.clear();
             self.commit();
@@ -2069,8 +2094,10 @@ mod tests {
 
     /// Draws one settings page headless, the way the app does, and says
     /// where each of `labels` landed, top to bottom.
-    fn rows_of(page: fn(&mut App, &mut egui::Ui), labels: &[&str]) -> Vec<f32> {
-        use egui_kittest::{kittest::Queryable, Harness};
+    /// Where `labels` start down the page, and where the name field of the
+    /// sample's "Work" (a calendar and a list both) starts and ends across it.
+    fn rows_of(page: fn(&mut App, &mut egui::Ui), labels: &[&str]) -> (Vec<f32>, [f32; 2]) {
+        use egui_kittest::{kittest::{By, Queryable}, Harness};
         let app = App::new(Some(std::path::PathBuf::from("unused.png")));
         let mut h = Harness::builder()
             .with_size(vec2(1100.0, 900.0))
@@ -2079,12 +2106,14 @@ mod tests {
             .with_accessibility_check(false)
             .build_ui_state(move |ui, app: &mut App| page(app, ui), app);
         h.run_steps(3);
-        labels.iter().map(|l| h.get_by_label(l).rect().min.y).collect()
+        let name = h.get(By::new().role(egui::accesskit::Role::TextInput).value("Work")).rect();
+        (labels.iter().map(|l| h.get_by_label(l).rect().min.y).collect(), [name.min.x, name.max.x])
     }
 
     /// Pages that do the same job for different things are built alike.
     /// Calendars and task lists: the title, then the default picker, then
-    /// the row that adds one, each at the same height on both pages. A new
+    /// the row that adds one, each at the same height on both pages, and
+    /// the name fields of the rows below at the same place across. A new
     /// page of that kind goes in here too.
     #[test]
     fn calendars_and_task_lists_pages_line_up() {
@@ -2092,12 +2121,15 @@ mod tests {
             (App::page_active, ["Active calendars", "Default calendar", "+ Add calendar"]),
             (App::page_lists, ["Task lists", "Default task list", "+ Add list"]),
         ];
-        let rows: Vec<Vec<f32>> = pages.iter().map(|(page, labels)| rows_of(*page, labels)).collect();
+        let (rows, names): (Vec<Vec<f32>>, Vec<[f32; 2]>) = pages.iter().map(|(page, labels)| rows_of(*page, labels)).unzip();
         for ((_, labels), ys) in pages.iter().zip(&rows) {
             assert!(ys.windows(2).all(|w| w[0] < w[1]), "{labels:?} are out of order: {ys:?}");
         }
         for (a, b) in rows[0].iter().zip(&rows[1]) {
             assert!((a - b).abs() < 1.0, "the rows don't line up: {:?} against {:?}", rows[0], rows[1]);
+        }
+        for (a, b) in names[0].iter().zip(&names[1]) {
+            assert!((a - b).abs() < 1.0, "the name fields don't line up: {:?} against {:?}", names[0], names[1]);
         }
     }
 }

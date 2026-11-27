@@ -1,6 +1,6 @@
 //! The task panel (left or right) and the bar above the calendar.
 
-use crate::strings::{tr, trf};
+use crate::strings::{tr, trf, trn};
 use crate::ids;
 use crate::motion;
 use crate::theme;
@@ -231,7 +231,7 @@ impl App {
             ui.separator();
             ui.menu_button(tr("Number of days"), |ui| {
                 for n in 2..=9u8 {
-                    if ui.selectable_label(v == View::Days(n), trf("{} days", &[&n])).clicked() {
+                    if ui.selectable_label(v == View::Days(n), trn(n, "1 day", "{} days", &[&n])).clicked() {
                         v = View::Days(n);
                         ui.close();
                     }
@@ -928,7 +928,7 @@ impl App {
             row_btn(ui, pr, &b, icons::ARCHIVE, theme::size::LARGE, glow, false, text, (muted, text));
             if b.clicked() {
                 let n = self.archive_done();
-                self.say(ctx, trf("Archived {} tasks", &[&n]), true);
+                self.say(ctx, trn(n, "Archived 1 task", "Archived {} tasks", &[&n]), true);
                 return;
             }
         }

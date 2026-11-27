@@ -1,6 +1,6 @@
 //! Taking in what the background threads hand back.
 
-use crate::strings::{tr, trf};
+use crate::strings::{tr, trf, trn};
 use super::*;
 
 impl App {
@@ -30,7 +30,7 @@ impl App {
                             let name = c.name.clone();
                             self.backoff.remove(&cal);
                             if feed_url.is_some() {
-                                self.say(ctx, trf("{}: {} events", &[&name, &count]), false);
+                                self.say(ctx, trn(count, "{}: 1 event", "{}: {} events", &[&name, &count]), false);
                             }
                         }
                         Err(e) => {
