@@ -8,7 +8,7 @@ use crate::theme;
 use crate::icons;
 use crate::model::*;
 use crate::views::midnight;
-use crate::{mix, rgb, App, Cmd, CreateKind, EventEdit, TaskEdit, COMMANDS};
+use crate::{mix, rgb, App, Cmd, CreateKind, EventEdit, ScopeFor, TaskEdit, COMMANDS};
 use chrono::{Duration, Local, NaiveDate, Timelike};
 use eframe::egui::{self, pos2, Align, Align2, FontId, Id, Layout, Margin, RichText, Stroke};
 
@@ -397,8 +397,9 @@ struct Offer {
     delete: bool,
     /// Some(is it skipped now) shows Skip or Unskip
     skip: Option<bool>,
-    /// ask which events of its repeat to save to, in place of the buttons
-    scope: bool,
+    /// ask which events of its repeat to save to or delete, in place of
+    /// the buttons
+    scope: Option<ScopeFor>,
 }
 
 /// Save and Cancel, with Skip and Delete on the right, kept at the foot of
@@ -417,13 +418,19 @@ fn editor_buttons(ui: &mut egui::Ui, offer: Offer, asking: bool) -> Pressed {
         });
         return out;
     }
-    if offer.scope {
-        // one of a repeat's events: the edit may be for the others too
-        ui.label(RichText::new(tr("Save changes to")).strong());
+    if let Some(what) = offer.scope {
+        // one of a repeat's events: the edit or the deletion may be for the
+        // others too
+        let ask = if what == ScopeFor::Delete { tr("Delete") } else { tr("Save changes to") };
+        ui.label(RichText::new(ask).strong());
         ui.horizontal_wrapped(|ui| {
             for (scope, text) in [(SeriesScope::This, tr("This event")), (SeriesScope::Following, tr("This and following")), (SeriesScope::All, tr("All events"))] {
                 if ui.button(text).clicked() {
-                    (out.save, out.scope) = (true, Some(scope));
+                    out.scope = Some(scope);
+                    match what {
+                        ScopeFor::Save => out.save = true,
+                        ScopeFor::Delete => out.delete = true,
+                    }
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -981,7 +988,7 @@ impl App {
                 title,
                 at,
                 focus,
-                Offer { delete: !is_new, skip: None, scope: false },
+                Offer { delete: !is_new, skip: None, scope: None },
                 |app| ed.borrow().changed(app.data.frame(ed.borrow().frame.id)),
                 |app, ui| app.frame_form(ui, &mut ed.borrow_mut(), &mut new_list),
             )
@@ -1425,7 +1432,7 @@ impl App {
     ) -> Pressed {
         let ask = asking_id(name);
         let asking = ctx.data(|d| d.get_temp::<bool>(ask)).unwrap_or(false);
-        let choosing = offer.scope && !asking;
+        let choosing = offer.scope.is_some() && !asking;
         let builder = egui::ViewportBuilder::default()
             .with_title(title)
             .with_app_id("katlendar")
@@ -1816,16 +1823,17 @@ impl App {
             self.toggle_skip(ctx, ed.ev.id);
             return self.editor = Some(ed);
         }
-        if ed.scope_ask && p.keep {
-            // back to editing, from the question of which events to save to
-            ed.scope_ask = false;
+        if ed.scope_ask.is_some() && p.keep {
+            // back to editing, from the question of which events it is for
+            ed.scope_ask = None;
             return self.editor = Some(ed);
         }
-        // one of a repeat's events asks first which of them the edit is for;
-        // a new repeat set on it makes a repeat of its own instead
-        let series = !ed.is_new && ed.repeat == Repeat::None && self.data.locked(&ed.ev).is_none() && self.data.series_others(ed.ev.id) > 0;
-        if save && series && p.scope.is_none() {
-            ed.scope_ask = true;
+        // one of a repeat's events asks first which of them the edit or the
+        // deletion is for; a new repeat set on it makes a repeat of its own
+        let in_series = !ed.is_new && self.data.locked(&ed.ev).is_none() && self.data.series_others(ed.ev.id) > 0;
+        let series = in_series && ed.repeat == Repeat::None;
+        if p.scope.is_none() && ((save && series) || (delete && in_series)) {
+            ed.scope_ask = Some(if save { ScopeFor::Save } else { ScopeFor::Delete });
             return self.editor = Some(ed);
         }
         if save && ed.task.as_mut().is_some_and(|t| t.read_text().is_err()) {
@@ -1915,6 +1923,8 @@ impl App {
             }
             self.selected = Some(id);
             self.commit();
+        } else if let (true, Some(scope)) = (delete && in_series, p.scope) {
+            self.delete_from_series(ctx, ed.ev.id, scope);
         } else if delete {
             self.delete_event(ctx, ed.ev.id);
         } else if !cancel {
@@ -1930,7 +1940,7 @@ impl App {
         let focus = ed.focus;
         let p = {
             let ed = std::cell::RefCell::new(&mut ed);
-            self.edit_window(ctx, "task_editor", tr("Task"), at, focus, Offer { delete: true, skip: None, scope: false }, |_| ed.borrow().changed(), |app, ui| app.task_form(ui, &mut ed.borrow_mut()))
+            self.edit_window(ctx, "task_editor", tr("Task"), at, focus, Offer { delete: true, skip: None, scope: None }, |_| ed.borrow().changed(), |app, ui| app.task_form(ui, &mut ed.borrow_mut()))
         };
         self.finish_task_edit(ctx, ed, p.save, p.cancel, p.delete);
     }
@@ -2325,7 +2335,7 @@ mod tests {
         ed.ev.end += Duration::hours(2);
         let ctx = egui::Context::default();
         app.finish_event_edit(&ctx, ed, Pressed { save: true, ..Default::default() });
-        let Some(mut ed) = app.editor.take().filter(|e| e.scope_ask) else { return false };
+        let Some(mut ed) = app.editor.take().filter(|e| e.scope_ask == Some(ScopeFor::Save)) else { return false };
         ed.ev.title = to.into();
         app.finish_event_edit(&ctx, ed, Pressed { save: true, scope, ..Default::default() });
         true
@@ -2358,6 +2368,47 @@ mod tests {
         app.data.events.push(Event { series: None, ..lone });
         assert!(!rename(&mut app, id, "Alone", None));
         assert_eq!(title(&app, id), "Alone");
+    }
+
+    #[test]
+    fn deleting_one_of_a_repeat_asks_which_events_go() {
+        let mut app = app_with_event();
+        let talks = weekly_talks(&mut app);
+        let ctx = egui::Context::default();
+        let delete = |app: &mut App, id: u64, scope: SeriesScope| {
+            app.edit_event(id);
+            let ed = app.editor.take().unwrap();
+            app.finish_event_edit(&ctx, ed, Pressed { delete: true, ..Default::default() });
+            let ed = app.editor.take().expect("the editor stays open, asking");
+            assert_eq!(ed.scope_ask, Some(ScopeFor::Delete));
+            app.finish_event_edit(&ctx, ed, Pressed { delete: true, scope: Some(scope), ..Default::default() });
+        };
+        let left = |app: &App| talks.iter().filter(|id| app.data.event(**id).is_some()).count();
+        delete(&mut app, talks[1], SeriesScope::This);
+        assert_eq!(left(&app), 3);
+        assert!(app.data.event(talks[1]).is_none());
+        delete(&mut app, talks[2], SeriesScope::Following);
+        assert_eq!(left(&app), 1);
+        assert!(app.data.event(talks[0]).is_some());
+        // the last one of a repeat goes without asking
+        app.edit_event(talks[0]);
+        let ed = app.editor.take().unwrap();
+        app.finish_event_edit(&ctx, ed, Pressed { delete: true, ..Default::default() });
+        assert!(app.editor.is_none());
+        assert_eq!(left(&app), 0);
+    }
+
+    #[test]
+    fn deleting_all_of_a_repeat_keeps_other_events() {
+        let mut app = app_with_event();
+        let talks = weekly_talks(&mut app);
+        let id = app.data.new_id();
+        let other = Event { id, title: "Other".into(), series: None, ..app.data.event(talks[0]).unwrap().clone() };
+        app.data.events.push(other);
+        let ctx = egui::Context::default();
+        app.delete_from_series(&ctx, talks[3], SeriesScope::All);
+        assert!(talks.iter().all(|t| app.data.event(*t).is_none()));
+        assert!(app.data.event(id).is_some());
     }
 
     #[test]

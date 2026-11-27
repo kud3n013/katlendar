@@ -29,9 +29,16 @@ pub struct EventEdit {
     /// saving lays the event out again on these days, until `ends`
     pub repeat: Repeat,
     pub ends: Ends,
-    /// Save was pressed on one of a repeat's events: the buttons ask which
-    /// of them the edit is for
-    pub scope_ask: bool,
+    /// Save or Delete was pressed on one of a repeat's events: the buttons
+    /// ask which of them it is for
+    pub scope_ask: Option<ScopeFor>,
+}
+
+/// What the event editor asks which of a repeat's events it is for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ScopeFor {
+    Save,
+    Delete,
 }
 
 /// What a block drawn on the calendar becomes.
@@ -858,7 +865,7 @@ impl App {
             task: None,
             repeat: Repeat::None,
             ends: Ends::Never,
-            scope_ask: false,
+            scope_ask: None,
         });
         self.selected = None;
     }
@@ -884,7 +891,7 @@ impl App {
             task: Some(TaskEdit::of(&task)),
             repeat: Repeat::None,
             ends: Ends::Never,
-            scope_ask: false,
+            scope_ask: None,
         });
         self.create = None;
         self.close_inline_editor();
@@ -900,7 +907,7 @@ impl App {
     pub fn edit_event_at(&mut self, id: u64, anchor_rect: Option<egui::Rect>) {
         if let Some(ev) = self.shown_event(id) {
             let task = ev.task_id.and_then(|t| self.data.task(t)).map(TaskEdit::of);
-            self.editor = Some(EventEdit { base: Some(ev.clone()), ev, is_new: false, focus: true, anchor_rect, task, repeat: Repeat::None, ends: Ends::Never, scope_ask: false });
+            self.editor = Some(EventEdit { base: Some(ev.clone()), ev, is_new: false, focus: true, anchor_rect, task, repeat: Repeat::None, ends: Ends::Never, scope_ask: None });
             self.create = None;
             self.selected = Some(id);
         }
@@ -937,6 +944,20 @@ impl App {
             return true;
         }
         false
+    }
+
+    /// Deletes the events of the event `id`'s repeat that `scope` names.
+    pub fn delete_from_series(&mut self, ctx: &egui::Context, id: u64, scope: SeriesScope) {
+        if self.refuse_remote(ctx, id) {
+            return;
+        }
+        self.snapshot();
+        let n = self.data.delete_from_series(id, scope);
+        if self.selected.is_some_and(|s| self.data.event(s).is_none()) {
+            self.selected = None;
+        }
+        self.commit();
+        self.say(ctx, if n == 1 { tr("Event deleted").into() } else { trf("Deleted {} events", &[&n]) }, true);
     }
 
     pub fn delete_event(&mut self, ctx: &egui::Context, id: u64) {
