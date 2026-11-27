@@ -373,6 +373,8 @@ struct Pressed {
     cancel: bool,
     delete: bool,
     skip: bool,
+    /// which events of a repeat Save was for, once asked
+    scope: Option<SeriesScope>,
     /// while unsaved changes were asked about: drop them, or go on editing
     discard: bool,
     keep: bool,
@@ -395,6 +397,8 @@ struct Offer {
     delete: bool,
     /// Some(is it skipped now) shows Skip or Unskip
     skip: Option<bool>,
+    /// ask which events of its repeat to save to, in place of the buttons
+    scope: bool,
 }
 
 /// Save and Cancel, with Skip and Delete on the right, kept at the foot of
@@ -409,6 +413,21 @@ fn editor_buttons(ui: &mut egui::Ui, offer: Offer, asking: bool) -> Pressed {
                 out.keep = ui.button(tr("Keep editing")).on_hover_text(tr("Esc")).clicked();
                 out.discard = ui.button(tr("Discard")).clicked();
                 out.save = ui.button(RichText::new(tr("Save")).strong()).on_hover_text(tr("Ctrl+Enter")).clicked();
+            });
+        });
+        return out;
+    }
+    if offer.scope {
+        // one of a repeat's events: the edit may be for the others too
+        ui.label(RichText::new(tr("Save changes to")).strong());
+        ui.horizontal_wrapped(|ui| {
+            for (scope, text) in [(SeriesScope::This, tr("This event")), (SeriesScope::Following, tr("This and following")), (SeriesScope::All, tr("All events"))] {
+                if ui.button(text).clicked() {
+                    (out.save, out.scope) = (true, Some(scope));
+                }
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                out.keep = ui.button(tr("Back")).on_hover_text(tr("Esc")).clicked();
             });
         });
         return out;
@@ -915,6 +934,9 @@ impl App {
                 // a repeating event is laid out as one event per time, so each
                 // can be moved or removed alone and all of them sync like any other
                 let times = c.repeat.times_after(day, c.ends);
+                if !times.is_empty() {
+                    ev.series = Some(self.data.new_id());
+                }
                 for d in &times {
                     let mut copy = ev.clone();
                     copy.id = self.data.new_id();
@@ -959,7 +981,7 @@ impl App {
                 title,
                 at,
                 focus,
-                Offer { delete: !is_new, skip: None },
+                Offer { delete: !is_new, skip: None, scope: false },
                 |app| ed.borrow().changed(app.data.frame(ed.borrow().frame.id)),
                 |app, ui| app.frame_form(ui, &mut ed.borrow_mut(), &mut new_list),
             )
@@ -1361,7 +1383,7 @@ impl App {
         };
         let at = self.editor_spot(ctx, ids::event_editor().with(ed.ev.id), ed.anchor_rect);
         let stored = (!ed.is_new).then(|| self.data.event(ed.ev.id)).flatten();
-        let offer = Offer { delete: stored.is_some_and(|e| self.data.locked(e).is_none()), skip: stored.filter(|e| e.task_id.is_none()).map(|e| e.skipped) };
+        let offer = Offer { delete: stored.is_some_and(|e| self.data.locked(e).is_none()), skip: stored.filter(|e| e.task_id.is_none()).map(|e| e.skipped), scope: ed.scope_ask };
         let focus = ed.focus;
         let pressed = {
             let ed = std::cell::RefCell::new(&mut ed);
@@ -1403,6 +1425,7 @@ impl App {
     ) -> Pressed {
         let ask = asking_id(name);
         let asking = ctx.data(|d| d.get_temp::<bool>(ask)).unwrap_or(false);
+        let choosing = offer.scope && !asking;
         let builder = egui::ViewportBuilder::default()
             .with_title(title)
             .with_app_id("katlendar")
@@ -1469,8 +1492,8 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             }
             out.cancel |= close;
-            out.keep |= asking && esc;
-            out.cancel |= esc && !asking;
+            out.keep |= (asking || choosing) && esc;
+            out.cancel |= esc && !asking && !choosing;
         });
         // leaving with changes not saved asks first; while it asks, closing
         // again only keeps the question up
@@ -1793,6 +1816,18 @@ impl App {
             self.toggle_skip(ctx, ed.ev.id);
             return self.editor = Some(ed);
         }
+        if ed.scope_ask && p.keep {
+            // back to editing, from the question of which events to save to
+            ed.scope_ask = false;
+            return self.editor = Some(ed);
+        }
+        // one of a repeat's events asks first which of them the edit is for;
+        // a new repeat set on it makes a repeat of its own instead
+        let series = !ed.is_new && ed.repeat == Repeat::None && self.data.locked(&ed.ev).is_none() && self.data.series_others(ed.ev.id) > 0;
+        if save && series && p.scope.is_none() {
+            ed.scope_ask = true;
+            return self.editor = Some(ed);
+        }
         if save && ed.task.as_mut().is_some_and(|t| t.read_text().is_err()) {
             self.warn(ctx, tr("The due date should look like 2026-11-30"));
             return self.editor = Some(ed);
@@ -1845,6 +1880,13 @@ impl App {
                 }
                 t.notes = ev.notes.clone();
             }
+            if let (Some(scope), Some(base)) = (p.scope.filter(|_| series), ed.base.as_ref()) {
+                self.data.save_to_series(base, &ev, scope);
+            }
+            // the copies and the event share a repeat of their own
+            if !copies.is_empty() {
+                ev.series = Some(self.data.new_id());
+            }
             let day = ev.start.date();
             for d in &copies {
                 let mut copy = ev.clone();
@@ -1858,6 +1900,9 @@ impl App {
                 self.say(ctx, trf("Added {} events", &[&copies.len()]), true);
             }
             if let Some(slot) = self.data.event_mut(id) {
+                if !copies.is_empty() {
+                    slot.series = ev.series;
+                }
                 slot.take_edits(ev);
             } else {
                 self.data.events.push(ev);
@@ -1885,7 +1930,7 @@ impl App {
         let focus = ed.focus;
         let p = {
             let ed = std::cell::RefCell::new(&mut ed);
-            self.edit_window(ctx, "task_editor", tr("Task"), at, focus, Offer { delete: true, skip: None }, |_| ed.borrow().changed(), |app, ui| app.task_form(ui, &mut ed.borrow_mut()))
+            self.edit_window(ctx, "task_editor", tr("Task"), at, focus, Offer { delete: true, skip: None, scope: false }, |_| ed.borrow().changed(), |app, ui| app.task_form(ui, &mut ed.borrow_mut()))
         };
         self.finish_task_edit(ctx, ed, p.save, p.cancel, p.delete);
     }
@@ -2257,6 +2302,62 @@ mod tests {
         talks.sort();
         let want: Vec<_> = (0..4).map(|w| (day + Duration::weeks(w), Some(EVENT_COLORS[0].0))).collect();
         assert_eq!(talks, want);
+    }
+
+    /// The Talk event repeated weekly four times; its events by date.
+    fn weekly_talks(app: &mut App) -> Vec<u64> {
+        app.edit_event(700);
+        let mut ed = app.editor.take().unwrap();
+        ed.repeat = Repeat::Weekly;
+        ed.ends = Ends::After(4);
+        let ctx = egui::Context::default();
+        app.finish_event_edit(&ctx, ed, Pressed { save: true, ..Default::default() });
+        let mut talks: Vec<_> = app.data.events.iter().filter(|e| e.title == "Talk").map(|e| (e.start, e.id)).collect();
+        talks.sort();
+        talks.into_iter().map(|t| t.1).collect()
+    }
+
+    fn rename(app: &mut App, id: u64, to: &str, scope: Option<SeriesScope>) -> bool {
+        app.edit_event(id);
+        let mut ed = app.editor.take().unwrap();
+        ed.ev.title = to.into();
+        ed.ev.start += Duration::hours(1);
+        ed.ev.end += Duration::hours(2);
+        let ctx = egui::Context::default();
+        app.finish_event_edit(&ctx, ed, Pressed { save: true, ..Default::default() });
+        let Some(mut ed) = app.editor.take().filter(|e| e.scope_ask) else { return false };
+        ed.ev.title = to.into();
+        app.finish_event_edit(&ctx, ed, Pressed { save: true, scope, ..Default::default() });
+        true
+    }
+
+    #[test]
+    fn saving_one_of_a_repeat_asks_which_events_it_is_for() {
+        let mut app = app_with_event();
+        let talks = weekly_talks(&mut app);
+        assert_eq!(talks.len(), 4);
+        let before: Vec<_> = talks.iter().map(|id| app.data.event(*id).unwrap().clone()).collect();
+        let title = |app: &App, id: u64| app.data.event(id).unwrap().title.clone();
+
+        assert!(rename(&mut app, talks[1], "Only", Some(SeriesScope::This)));
+        assert_eq!(talks.iter().map(|id| title(&app, *id)).collect::<Vec<_>>(), ["Talk", "Only", "Talk", "Talk"]);
+
+        assert!(rename(&mut app, talks[2], "Later", Some(SeriesScope::Following)));
+        assert_eq!(talks.iter().map(|id| title(&app, *id)).collect::<Vec<_>>(), ["Talk", "Only", "Later", "Later"]);
+        // the later ones moved an hour, kept their days and grew an hour
+        let e = app.data.event(talks[3]).unwrap();
+        assert_eq!((e.start, e.end), (before[3].start + Duration::hours(1), before[3].end + Duration::hours(2)));
+        assert_eq!(app.data.event(talks[0]).unwrap().start, before[0].start);
+        // and are a repeat of their own now
+        assert!(rename(&mut app, talks[0], "Early", Some(SeriesScope::All)));
+        assert_eq!(talks.iter().map(|id| title(&app, *id)).collect::<Vec<_>>(), ["Early", "Early", "Later", "Later"]);
+
+        // a lone event saves without asking
+        let id = app.data.new_id();
+        let lone = Event { id, title: "Lone".into(), ..app.data.event(700).unwrap().clone() };
+        app.data.events.push(Event { series: None, ..lone });
+        assert!(!rename(&mut app, id, "Alone", None));
+        assert_eq!(title(&app, id), "Alone");
     }
 
     #[test]
