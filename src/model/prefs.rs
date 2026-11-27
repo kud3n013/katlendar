@@ -166,6 +166,10 @@ pub struct Prefs {
     pub calendar_maps: Vec<CalMap>,
     /// the Photon server places are looked up on; empty for komoot's
     pub photon_server: String,
+    /// settings a newer version wrote that this one doesn't know, written
+    /// back as they were, so running an older copy doesn't wipe them
+    #[serde(flatten)]
+    pub unknown: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for Prefs {
@@ -227,6 +231,7 @@ impl Default for Prefs {
             map_provider: MapProvider::default(),
             calendar_maps: vec![],
             photon_server: String::new(),
+            unknown: Default::default(),
         }
     }
 }

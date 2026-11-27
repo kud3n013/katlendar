@@ -989,3 +989,25 @@ fn new_tasks_go_to_the_picked_default_list() {
     d.remove_own_list(7);
     assert_eq!(d.task(2).unwrap().list, 0);
 }
+
+#[test]
+fn a_second_copy_of_the_app_cannot_take_the_data() {
+    let dir = std::env::temp_dir().join(format!("katlendar-lock-{}", std::process::id()));
+    let p = dir.join("katlendar.lock");
+    let first = super::data::lock_at(&p).unwrap();
+    assert!(first.is_some());
+    assert_eq!(super::data::lock_at(&p).err(), Some(AlreadyOpen));
+    // once the first copy is gone, the next one opens
+    drop(first);
+    assert!(super::data::lock_at(&p).unwrap().is_some());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn settings_from_a_newer_version_survive_an_older_one() {
+    let p: Prefs = serde_json::from_str(r#"{"default_list": 7, "some_new_setting": {"on": true}}"#).unwrap();
+    assert_eq!(p.default_list, Some(7));
+    let back: serde_json::Value = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+    assert_eq!(back["some_new_setting"]["on"], true);
+    assert_eq!(back["default_list"], 7);
+}
