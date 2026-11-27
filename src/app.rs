@@ -66,8 +66,9 @@ pub struct CreateEdit {
 }
 
 impl CreateEdit {
-    pub fn new(ev: Event, kind: CreateKind, anchor_rect: egui::Rect) -> Self {
-        CreateEdit { ev, kind, anchor_rect, focus: true, task: Task::default(), due_text: String::new(), repeat: Repeat::None, ends: Ends::Never }
+    /// A new task made here goes to `list` unless another is picked.
+    pub fn new(ev: Event, kind: CreateKind, anchor_rect: egui::Rect, list: u64) -> Self {
+        CreateEdit { ev, kind, anchor_rect, focus: true, task: Task { list, ..Default::default() }, due_text: String::new(), repeat: Repeat::None, ends: Ends::Never }
     }
 }
 
@@ -760,6 +761,7 @@ impl App {
             },
             CreateKind::Task,
             anchor_rect,
+            self.data.default_list(),
         ));
         self.close_inline_editor();
         self.selected = None;
@@ -873,7 +875,7 @@ impl App {
     /// Opens the editor on a new task with a block at `start`; the task is
     /// kept only once saved.
     pub fn open_new_task_at(&mut self, start: NaiveDateTime, mins: i64) {
-        let task = Task { id: self.data.new_id(), duration_min: Some(mins), ..Default::default() };
+        let task = Task { id: self.data.new_id(), duration_min: Some(mins), list: self.data.default_list(), ..Default::default() };
         let id = self.data.new_id();
         self.editor = Some(EventEdit {
             ev: Event {

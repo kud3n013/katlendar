@@ -1061,7 +1061,7 @@ impl App {
                         .reduce(|a, b| a.union(b))
                         .unwrap_or_else(|| Rect::from_center_size(rect.center(), vec2(120.0, 40.0)));
                     self.close_block_window();
-                    self.create = Some(CreateEdit::new(draft, CreateKind::Task, anchor));
+                    self.create = Some(CreateEdit::new(draft, CreateKind::Task, anchor, self.data.default_list()));
                 }
                 Some(Drag::Move { id, .. }) | Some(Drag::Resize { id }) if self.session_kept_out(id).is_some() => {
                     // back to where it was: the drag began with a snapshot

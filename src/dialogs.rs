@@ -1005,7 +1005,7 @@ impl App {
             // back to a task or an event, keeping the name and the calendar
             ev.title = ed.frame.name.clone();
             ev.calendar = ed.frame.calendar;
-            self.create = Some(crate::CreateEdit::new(ev, kind, rect));
+            self.create = Some(crate::CreateEdit::new(ev, kind, rect, self.data.default_list()));
             // the block window ran earlier in this pass; run it again at once
             ctx.request_discard("the frame window turned back to a block");
             return;
@@ -2409,6 +2409,17 @@ mod tests {
         app.delete_from_series(&ctx, talks[3], SeriesScope::All);
         assert!(talks.iter().all(|t| app.data.event(*t).is_none()));
         assert!(app.data.event(id).is_some());
+    }
+
+    #[test]
+    fn a_task_made_on_the_calendar_starts_in_the_default_list() {
+        let mut app = app_with_event();
+        let id = app.new_list("Work");
+        app.data.prefs.default_list = Some(id);
+        app.open_new_task_at(App::now(), 30);
+        assert_eq!(app.editor.as_ref().unwrap().task.as_ref().unwrap().task.list, id);
+        app.open_create(App::now(), 30, egui::Rect::NOTHING);
+        assert_eq!(app.create.as_ref().unwrap().task.list, id);
     }
 
     #[test]
