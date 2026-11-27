@@ -39,6 +39,10 @@ windows-native-keyring-store = "1.1.0"
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 
+# headless egui for the layout tests: no GPU, it reads where widgets landed
+[dev-dependencies]
+egui_kittest = { version = "=0.37.0", default-features = false }
+
 [profile.dev]
 opt-level = 1
 
