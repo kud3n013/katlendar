@@ -1023,6 +1023,20 @@ impl App {
         s
     }
 
+    /// The top of a page that manages a collection (calendars, task lists):
+    /// its title, what the page is for, the default picker, then the row that
+    /// adds one. Every such page goes through here so they stay alike: put a
+    /// new collection page's top through it too, not by hand.
+    fn collection_top(&mut self, ui: &mut egui::Ui, title: &str, desc: &str, default: impl FnOnce(&mut Self, &mut egui::Ui), add: impl FnOnce(&mut Self, &mut egui::Ui)) {
+        heading(ui, title);
+        ui.add(egui::Label::new(RichText::new(desc).size(theme::size::UI).color(self.pal.muted)).wrap());
+        ui.add_space(12.0);
+        default(self, ui);
+        ui.add_space(8.0);
+        add(self, ui);
+        ui.add_space(10.0);
+    }
+
     /// Manage calendars: show or hide, rename, recolour, add and remove.
     fn page_active(&mut self, ui: &mut egui::Ui) {
         if finding(ui) {
@@ -1033,35 +1047,39 @@ impl App {
         }
         let ctx = ui.ctx().clone();
         let (muted, border, side, text) = (self.pal.muted, self.pal.border, self.pal.side, self.pal.text);
-        heading(ui, tr("Active calendars"));
-        ui.add(egui::Label::new(RichText::new(tr("Show or hide calendars, rename them, change their colour, add new ones or remove them.")).size(theme::size::UI).color(muted)).wrap());
-        ui.add_space(12.0);
-        // where a drawn block and a new event start
-        let mut default = self.data.default_calendar();
-        let was = default;
-        let cals: Vec<(u64, String)> = self.data.calendars.iter().filter(|c| c.writable()).map(|c| (c.id, c.name.clone())).collect();
-        row(ui, tr("Default calendar"), tr("A block drawn on the calendar and a new event start in this calendar"), |ui| combo(ui, "defcal", &mut default, &cals));
-        if default != was {
-            self.data.prefs.default_calendar = Some(default);
-            self.commit();
-        }
-        ui.add_space(8.0);
-        // add a calendar of one's own
-        let mut subscribe = false;
-        let added = add_row(ui, &mut self.new_cal_name, tr("New calendar name"), tr("+ Add calendar"), self.pal.accent, |ui| {
-            subscribe = ui.add(egui::Button::new(RichText::new(tr("Subscribe by link…")).size(theme::size::UI)).corner_radius(theme::RADIUS)).clicked();
-        });
-        if let Some(name) = added {
-            self.snapshot();
-            let n = self.data.calendars.len();
-            let id = self.data.new_id();
-            self.data.calendars.push(Calendar { id, name, color: EVENT_COLORS[(n * 3 + 1) % EVENT_COLORS.len()].0, visible: true, ..Default::default() });
-            self.commit();
-        }
-        if subscribe {
-            self.settings_page = Page::Calendars;
-        }
-        ui.add_space(10.0);
+        self.collection_top(
+            ui,
+            tr("Active calendars"),
+            tr("Show or hide calendars, rename them, change their colour, add new ones or remove them."),
+            |app, ui| {
+                // where a drawn block and a new event start
+                let mut default = app.data.default_calendar();
+                let was = default;
+                let cals: Vec<(u64, String)> = app.data.calendars.iter().filter(|c| c.writable()).map(|c| (c.id, c.name.clone())).collect();
+                row(ui, tr("Default calendar"), tr("A block drawn on the calendar and a new event start in this calendar"), |ui| combo(ui, "defcal", &mut default, &cals));
+                if default != was {
+                    app.data.prefs.default_calendar = Some(default);
+                    app.commit();
+                }
+            },
+            |app, ui| {
+                // add a calendar of one's own
+                let mut subscribe = false;
+                let added = add_row(ui, &mut app.new_cal_name, tr("New calendar name"), tr("+ Add calendar"), app.pal.accent, |ui| {
+                    subscribe = ui.add(egui::Button::new(RichText::new(tr("Subscribe by link…")).size(theme::size::UI)).corner_radius(theme::RADIUS)).clicked();
+                });
+                if let Some(name) = added {
+                    app.snapshot();
+                    let n = app.data.calendars.len();
+                    let id = app.data.new_id();
+                    app.data.calendars.push(Calendar { id, name, color: EVENT_COLORS[(n * 3 + 1) % EVENT_COLORS.len()].0, visible: true, ..Default::default() });
+                    app.commit();
+                }
+                if subscribe {
+                    app.settings_page = Page::Calendars;
+                }
+            },
+        );
         let own_count = self.data.calendars.iter().filter(|c| c.is_local()).count();
         let counts: Vec<usize> = self.data.calendars.iter().map(|c| self.data.events.iter().filter(|e| e.calendar == c.id).count()).collect();
         let mut remove: Option<u64> = None;
@@ -1242,25 +1260,29 @@ impl App {
             return;
         }
         let (muted, border, side, text) = (self.pal.muted, self.pal.border, self.pal.side, self.pal.text);
-        heading(ui, tr("Task lists"));
-        ui.add(egui::Label::new(RichText::new(tr("Rename your task lists, change their colour and icon, add new ones or remove them.")).size(theme::size::UI).color(muted)).wrap());
-        ui.add_space(12.0);
-        // where a task goes when no list is picked for it
-        let mut default = self.data.default_list();
-        let was = default;
-        let lists: Vec<(u64, String)> =
-            std::iter::once(0).chain(self.data.lists.iter().filter(|l| !l.read_only).map(|l| l.id)).map(|id| (id, self.data.list_title(id))).collect();
-        row(ui, tr("Default task list"), tr("A new task goes to this list unless you pick another"), |ui| combo(ui, "deflist", &mut default, &lists));
-        if default != was {
-            self.data.prefs.default_list = Some(default).filter(|id| *id != 0);
-            self.commit();
-        }
-        ui.add_space(8.0);
-        if let Some(name) = add_row(ui, &mut self.new_list_name, tr("New list name"), tr("+ Add list"), self.pal.accent, |_| {}) {
-            self.snapshot();
-            self.new_list(&name);
-        }
-        ui.add_space(10.0);
+        self.collection_top(
+            ui,
+            tr("Task lists"),
+            tr("Rename your task lists, change their colour and icon, add new ones or remove them."),
+            |app, ui| {
+                // where a task goes when no list is picked for it
+                let mut default = app.data.default_list();
+                let was = default;
+                let lists: Vec<(u64, String)> =
+                    std::iter::once(0).chain(app.data.lists.iter().filter(|l| !l.read_only).map(|l| l.id)).map(|id| (id, app.data.list_title(id))).collect();
+                row(ui, tr("Default task list"), tr("A new task goes to this list unless you pick another"), |ui| combo(ui, "deflist", &mut default, &lists));
+                if default != was {
+                    app.data.prefs.default_list = Some(default).filter(|id| *id != 0);
+                    app.commit();
+                }
+            },
+            |app, ui| {
+                if let Some(name) = add_row(ui, &mut app.new_list_name, tr("New list name"), tr("+ Add list"), app.pal.accent, |_| {}) {
+                    app.snapshot();
+                    app.new_list(&name);
+                }
+            },
+        );
         let ids: Vec<u64> = std::iter::once(0).chain(self.data.lists.iter().map(|l| l.id)).collect();
         let mut remove: Option<u64> = None;
         for lid in ids {
@@ -2043,6 +2065,40 @@ mod tests {
         assert!(!search_hit(&w, &["Time format", ""]));
         assert!(search_hit(&search_words("ctrl+t"), &["Create a new task", "Events and tasks", "Ctrl+T"]));
         assert!(search_hit(&search_words(""), &["anything"]));
+    }
+
+    /// Draws one settings page headless, the way the app does, and says
+    /// where each of `labels` landed, top to bottom.
+    fn rows_of(page: fn(&mut App, &mut egui::Ui), labels: &[&str]) -> Vec<f32> {
+        use egui_kittest::{kittest::Queryable, Harness};
+        let app = App::new(Some(std::path::PathBuf::from("unused.png")));
+        let mut h = Harness::builder()
+            .with_size(vec2(1100.0, 900.0))
+            .with_context_setup(|ctx| crate::fonts::apply(ctx, ""))
+            // the rename fields and pickers have no spoken names yet
+            .with_accessibility_check(false)
+            .build_ui_state(move |ui, app: &mut App| page(app, ui), app);
+        h.run_steps(3);
+        labels.iter().map(|l| h.get_by_label(l).rect().min.y).collect()
+    }
+
+    /// Pages that do the same job for different things are built alike.
+    /// Calendars and task lists: the title, then the default picker, then
+    /// the row that adds one, each at the same height on both pages. A new
+    /// page of that kind goes in here too.
+    #[test]
+    fn calendars_and_task_lists_pages_line_up() {
+        let pages: [(fn(&mut App, &mut egui::Ui), [&str; 3]); 2] = [
+            (App::page_active, ["Active calendars", "Default calendar", "+ Add calendar"]),
+            (App::page_lists, ["Task lists", "Default task list", "+ Add list"]),
+        ];
+        let rows: Vec<Vec<f32>> = pages.iter().map(|(page, labels)| rows_of(*page, labels)).collect();
+        for ((_, labels), ys) in pages.iter().zip(&rows) {
+            assert!(ys.windows(2).all(|w| w[0] < w[1]), "{labels:?} are out of order: {ys:?}");
+        }
+        for (a, b) in rows[0].iter().zip(&rows[1]) {
+            assert!((a - b).abs() < 1.0, "the rows don't line up: {:?} against {:?}", rows[0], rows[1]);
+        }
     }
 }
 
