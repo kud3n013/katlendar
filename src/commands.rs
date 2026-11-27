@@ -239,7 +239,7 @@ impl App {
                 self.anchor = start.date();
                 self.open_new_event(start, NEW_EVENT_MIN, false);
             }
-            Cmd::NewTask => self.open_new_task(0),
+            Cmd::NewTask => self.open_new_task(self.data.default_list()),
             Cmd::NewFrame => {
                 // the viewed day, at the next full hour when that is today
                 let now = Self::now();

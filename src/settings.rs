@@ -1253,6 +1253,17 @@ impl App {
             }
         });
         ui.add_space(10.0);
+        // where a task goes when no list is picked for it
+        let mut default = self.data.default_list();
+        let was = default;
+        let lists: Vec<(u64, String)> =
+            std::iter::once(0).chain(self.data.lists.iter().filter(|l| !l.read_only).map(|l| l.id)).map(|id| (id, self.data.list_title(id))).collect();
+        row(ui, tr("Default task list"), tr("A new task goes to this list unless you pick another"), |ui| combo(ui, "deflist", &mut default, &lists));
+        if default != was {
+            self.data.prefs.default_list = Some(default).filter(|id| *id != 0);
+            self.commit();
+        }
+        ui.add_space(10.0);
         let ids: Vec<u64> = std::iter::once(0).chain(self.data.lists.iter().map(|l| l.id)).collect();
         let mut remove: Option<u64> = None;
         for lid in ids {

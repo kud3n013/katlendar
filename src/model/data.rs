@@ -351,6 +351,11 @@ impl Data {
     }
     /// The calendar new events start in: the one picked under Active
     /// calendars while it can take them, else the first of one's own.
+    /// The task list a task goes to when none is picked for it: the one
+    /// set in Settings while it is there and takes tasks, else the Inbox.
+    pub fn default_list(&self) -> u64 {
+        self.prefs.default_list.filter(|id| self.lists.iter().any(|l| l.id == *id && !l.read_only)).unwrap_or(0)
+    }
     pub fn default_calendar(&self) -> u64 {
         self.prefs.default_calendar.filter(|id| self.calendar(*id).is_some_and(|c| c.writable())).unwrap_or_else(|| self.first_own_calendar())
     }

@@ -149,11 +149,13 @@ impl Data {
             }
         }
     }
-    /// Removes one of one's own lists; its tasks go to the Inbox.
+    /// Removes one of one's own lists; its tasks go to the default list,
+    /// or the Inbox when it was the default.
     pub fn remove_own_list(&mut self, id: u64) {
         self.lists.retain(|l| l.id != id);
+        let to = self.default_list();
         for t in self.tasks.iter_mut().filter(|t| t.list == id) {
-            t.list = 0;
+            t.list = to;
         }
         for f in self.frames.iter_mut() {
             f.filter.lists.retain(|l| *l != id);

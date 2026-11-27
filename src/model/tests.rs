@@ -961,3 +961,29 @@ fn deadlines_go_by_priority_until_put_in_order_by_hand() {
     d.task_mut(1).unwrap().due_order = Some((ymd(11, 19), 0));
     assert_eq!(d.deadlines_on(day), vec![7, 2, 4, 3, 1]);
 }
+
+#[test]
+fn new_tasks_go_to_the_picked_default_list() {
+    let mut d = empty();
+    d.lists.push(TaskList { id: 7, name: "Work".into(), ..Default::default() });
+    d.lists.push(TaskList { id: 8, name: "Shared".into(), read_only: true, ..Default::default() });
+    // the Inbox unless another is picked
+    assert_eq!(d.default_list(), 0);
+    d.prefs.default_list = Some(7);
+    assert_eq!(d.default_list(), 7);
+    // one that can't take tasks, or is gone, is the Inbox again
+    d.prefs.default_list = Some(8);
+    assert_eq!(d.default_list(), 0);
+    d.prefs.default_list = Some(99);
+    assert_eq!(d.default_list(), 0);
+    // a removed list's tasks go to the default list
+    d.lists.push(TaskList { id: 9, name: "Old".into(), ..Default::default() });
+    d.tasks.push(Task { id: 1, list: 9, ..Default::default() });
+    d.prefs.default_list = Some(7);
+    d.remove_own_list(9);
+    assert_eq!(d.task(1).unwrap().list, 7);
+    // and to the Inbox when it was the default
+    d.tasks.push(Task { id: 2, list: 7, ..Default::default() });
+    d.remove_own_list(7);
+    assert_eq!(d.task(2).unwrap().list, 0);
+}
