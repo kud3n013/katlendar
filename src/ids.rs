@@ -93,6 +93,8 @@ fixed! {
     drag_edge = "drag_edge";
     /// how big a read-only event's "Open in …" button was drawn
     maps_button = "maps_button";
+    /// the colour priority row being dragged, and where it was taken by
+    color_held = "colour held";
 }
 
 keyed! {

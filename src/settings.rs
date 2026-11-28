@@ -1533,7 +1533,7 @@ impl App {
             page_result(ui, Page::Colors, tr("Colour priority"), tr("Whose colour a block takes first: its tag's, its list's or its calendar's"), &["colour", "color", "priority", "order", "tag", "list", "calendar"]);
             return;
         }
-        let (muted, border, text, accent) = (self.pal.muted, self.pal.border, self.pal.text, self.pal.accent);
+        let (muted, border) = (self.pal.muted, self.pal.border);
         heading(ui, tr("Colours"));
         ui.add(egui::Label::new(RichText::new(tr("Choose where a block on the calendar takes its colour from: its task's tag, its task's list or its calendar. A colour picked for a block or a task always wins.")).size(theme::size::UI).color(muted)).wrap());
         ui.add_space(12.0);
@@ -1547,53 +1547,8 @@ impl App {
         ui.add_space(8.0);
         let mut order = p.color_order();
         let before = order.clone();
-        // a row picked up, and where it is let go
-        #[derive(Clone, Copy)]
-        struct Held(usize);
-        let mut drop: Option<(usize, usize)> = None;
-        let held = egui::DragAndDrop::payload::<Held>(ui.ctx()).map(|h| h.0);
-        let n = order.len();
-        for (i, sp) in order.iter_mut().enumerate() {
-            let what = match sp.source {
-                ColorSource::Lists => tr("the list a task is in; the Inbox is a list too"),
-                ColorSource::Tags => tr("a task's first tag"),
-                ColorSource::Calendars => tr("the calendar a block is in"),
-            };
-            let resp = ui
-                .allocate_ui_with_layout(vec2(ui.available_width(), 44.0), Layout::left_to_right(Align::Center), |ui| {
-                    let grab = ui.dnd_drag_source(ids::color_source(sp.source), Held(i), |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(icons::GRIP).size(theme::size::LARGE).color(muted));
-                            ui.label(RichText::new(format!("{}", i + 1)).size(theme::size::UI).color(muted));
-                        });
-                    });
-                    grab.response.on_hover_text(tr("Drag to reorder"));
-                    ui.checkbox(&mut sp.on, "").on_hover_text(tr("Use this colour"));
-                    let name = RichText::new(sp.source.label()).size(theme::size::LARGE).color(if sp.on { text } else { muted });
-                    ui.label(name);
-                    ui.add_space(8.0);
-                    ui.label(RichText::new(what).size(theme::size::CAPTION).color(muted));
-                })
-                .response;
-            // where the held row would land
-            if let Some(from) = held.filter(|f| *f != i) {
-                if resp.contains_pointer() {
-                    let y = if from < i { resp.rect.bottom() } else { resp.rect.top() };
-                    ui.painter().line_segment([egui::pos2(resp.rect.left(), y), egui::pos2(resp.rect.right(), y)], Stroke::new(2.0, accent));
-                }
-            }
-            if let Some(from) = resp.dnd_release_payload::<Held>() {
-                drop = Some((from.0, i));
-            }
-            if i + 1 < n {
-                let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-                ui.painter().rect_filled(r, 0.0, border);
-            }
-        }
-        if let Some((from, to)) = drop {
-            let x = order.remove(from);
-            order.insert(to, x);
-        }
+        self.priority_rows(ui, &mut order);
+        let p = &mut self.data.prefs;
         if order != before {
             p.color_order = order;
         }
@@ -1617,6 +1572,123 @@ impl App {
         }
         ui.add_space(4.0);
         ui.label(RichText::new(tr("Blue is the list, orange the tag, green the calendar.")).size(theme::size::CAPTION).color(muted));
+    }
+
+    /// The colour sources, one row each, picked up by the grip and carried
+    /// to a new place; the others slide aside to make room, and the one let
+    /// go settles into its slot.
+    fn priority_rows(&mut self, ui: &mut egui::Ui, order: &mut Vec<SourcePref>) {
+        const ROW: f32 = 44.0;
+        const PITCH: f32 = ROW + 1.0;
+        let (muted, border, text, side) = (self.pal.muted, self.pal.border, self.pal.text, self.pal.side);
+        let ctx = ui.ctx().clone();
+        let n = order.len();
+        let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), PITCH * n as f32 - 1.0), Sense::hover());
+        // the lines between slots stay put; the rows move over them
+        for k in 1..n {
+            let y = area.top() + PITCH * k as f32 - 1.0;
+            ui.painter().rect_filled(egui::Rect::from_min_size(egui::pos2(area.left(), y), vec2(area.width(), 1.0)), 0.0, border);
+        }
+        // the row held, and how far below its top it was taken
+        let held_id = ids::color_held();
+        let mut held: Option<(usize, f32)> = ctx.data(|d| d.get_temp(held_id));
+        // test aid: the row the drag aid names is held, by its middle
+        let aid = self.shot.as_ref().and(crate::testaid::get().drag.as_ref());
+        if let Some((name, _)) = aid {
+            held = order.iter().position(|sp| sp.source.label().eq_ignore_ascii_case(name)).map(|i| (i, ROW / 2.0));
+        }
+        let pointer = ctx.pointer_interact_pos();
+        let slot_of = |y: f32| (((y - area.top()) / PITCH).round().max(0.0) as usize).min(n - 1);
+        // where the held row is now, and the slot it would land in
+        let carried = held.and_then(|(i, grab)| pointer.map(|p| (i, (p.y - grab).clamp(area.top(), area.top() + PITCH * (n - 1) as f32))));
+        let target = carried.map(|(i, y)| (i, slot_of(y)));
+        // each row's slot as things would be if it were let go now
+        let slot = |i: usize| -> usize {
+            match target {
+                Some((h, t)) if i == h => t,
+                Some((h, t)) => {
+                    let without = if i > h { i - 1 } else { i };
+                    if without >= t { without + 1 } else { without }
+                }
+                None => i,
+            }
+        };
+        let mut start: Option<(usize, f32)> = None;
+        let mut letgo = false;
+        let mut draw = |ui: &mut egui::Ui, i: usize, sp: &mut SourcePref| {
+            let rest = area.top() + PITCH * slot(i) as f32;
+            let anim = ids::color_source(sp.source);
+            let y = match carried {
+                // the held row follows the pointer at once
+                Some((h, y)) if h == i => ctx.animate_value_with_time(anim, y, 0.0),
+                _ => ctx.animate_value_with_time(anim, rest, motion::NORMAL.secs()),
+            };
+            let r = egui::Rect::from_min_size(egui::pos2(area.left(), y), vec2(area.width(), ROW));
+            let lifted = carried.is_some_and(|(h, _)| h == i);
+            if lifted {
+                let lift = r.expand2(vec2(4.0, 0.0));
+                crate::fill_squircle(ui.painter(), lift.translate(vec2(0.0, 3.0)), 10.0, Color32::from_black_alpha(if self.pal.dark { 90 } else { 30 }));
+                crate::fill_squircle(ui.painter(), lift, 10.0, mix(side, text, 0.06));
+                crate::stroke_squircle(ui.painter(), lift.shrink(0.5), 10.0, Stroke::new(1.0, border));
+            }
+            let what = match sp.source {
+                ColorSource::Lists => tr("the list a task is in; the Inbox is a list too"),
+                ColorSource::Tags => tr("a task's first tag"),
+                ColorSource::Calendars => tr("the calendar a block is in"),
+            };
+            let mut row = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(Layout::left_to_right(Align::Center)).id_salt(anim));
+            // the grip and number are the handle
+            let grip = row.horizontal(|ui| {
+                ui.label(RichText::new(icons::GRIP).size(theme::size::LARGE).color(if lifted { text } else { muted }));
+                ui.label(RichText::new(format!("{}", slot(i) + 1)).size(theme::size::UI).color(muted));
+            });
+            let handle = row.interact(grip.response.rect.expand(4.0), anim.with("grip"), Sense::drag());
+            if handle.drag_started() {
+                if let Some(p) = handle.interact_pointer_pos() {
+                    start = Some((i, p.y - r.top()));
+                }
+            }
+            if handle.drag_stopped() {
+                letgo = true;
+            }
+            let handle = handle.on_hover_text(tr("Drag to reorder"));
+            if handle.hovered() || lifted {
+                ctx.set_cursor_icon(if lifted { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+            }
+            row.checkbox(&mut sp.on, "").on_hover_text(tr("Use this colour"));
+            row.label(RichText::new(sp.source.label()).size(theme::size::LARGE).color(if sp.on { text } else { muted }));
+            row.add_space(8.0);
+            row.label(RichText::new(what).size(theme::size::CAPTION).color(muted));
+        };
+        // the held row last, over the others
+        let held_i = carried.map(|(h, _)| h);
+        for (i, sp) in order.iter_mut().enumerate() {
+            if Some(i) != held_i {
+                draw(ui, i, sp);
+            }
+        }
+        if let Some(h) = held_i {
+            draw(ui, h, &mut order[h]);
+        }
+        if let Some(s) = start {
+            held = Some(s);
+        }
+        if aid.is_none() && (letgo || (held.is_some() && !ctx.input(|i| i.pointer.any_down()))) {
+            if let Some((h, t)) = target {
+                let x = order.remove(h);
+                order.insert(t, x);
+            }
+            held = None;
+        }
+        ctx.data_mut(|d| match held {
+            Some(h) => {
+                d.insert_temp(held_id, h);
+            }
+            None => d.remove::<(usize, f32)>(held_id),
+        });
+        if held.is_some() {
+            ctx.request_repaint();
+        }
     }
 
     fn page_calendars(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
