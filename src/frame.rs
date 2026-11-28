@@ -186,7 +186,9 @@ impl eframe::App for App {
         // moving in time slides the old page out and the new one in, the way
         // the days run; another view fades in
         let time = ctx.input(|i| i.time);
-        let shown = (self.view, self.anchor);
+        // the first day on screen, not the anchor: a week view keeps its
+        // week while the anchor moves inside it, and that is no step
+        let shown = (self.view, self.visible_days().first().copied().unwrap_or(self.anchor));
         // a step in time, as the share of the columns it moved (a step
         // shorter than the days on screen moves just that many columns)
         let mut stepped: Option<f32> = None;
