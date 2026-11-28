@@ -645,7 +645,13 @@ impl App {
             }
             self.side_scroll += side;
             if self.side_scroll.abs() > 60.0 {
-                self.anchor -= Duration::days(self.side_scroll.signum() as i64);
+                // a day at a time where the days follow the anchor; a week
+                // view shows whole weeks, so it moves by a page
+                let dir = -self.side_scroll.signum() as i64;
+                match self.view {
+                    View::Days(_) => self.anchor += Duration::days(dir),
+                    _ => self.step(dir),
+                }
                 self.side_scroll = 0.0;
             }
         }
