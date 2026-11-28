@@ -766,6 +766,37 @@ fn buffers_come_from_chosen_calendars_only() {
 }
 
 #[test]
+fn a_dragged_event_stops_where_its_buffer_meets_anothers() {
+    let mut d = empty();
+    meeting(&mut d, 90, 2);
+    meeting(&mut d, 91, 2);
+    (d.events[1].start, d.events[1].end) = (hm(13, 0), hm(14, 0));
+    *d.prefs.buffer_mut(2) = CalBuffer { calendar: 2, enabled: true, before_min: 30, after_min: 15 };
+    // 10:00-11:00 with 15 after meets 13:00-14:00 with 30 before at 12:30
+    assert_eq!(d.buffer_clear_start(90, hm(11, 0)), hm(11, 0), "clear: it goes where it is dragged");
+    assert_eq!(d.buffer_clear_start(90, hm(12, 0)), hm(11, 15), "down into the other's buffer: pushed back up");
+    assert_eq!(d.buffer_clear_start(90, hm(13, 30)), hm(11, 15), "onto the other: still on its own side");
+    assert_eq!(d.buffer_clear_start(90, hm(15, 0)), hm(15, 0), "past it and clear: it may go there");
+    // from below, it is pushed back down
+    (d.events[0].start, d.events[0].end) = (hm(16, 0), hm(17, 0));
+    assert_eq!(d.buffer_clear_start(90, hm(14, 0)), hm(14, 45));
+    // a longer end stops short of the next buffer
+    (d.events[0].start, d.events[0].end) = (hm(10, 0), hm(11, 0));
+    assert_eq!(d.buffer_clear_end(90, hm(13, 0)), hm(12, 15));
+    assert_eq!(d.buffer_clear_end(90, hm(12, 0)), hm(12, 0));
+    // without buffers on either, events may overlap as before
+    d.events[0].buffer = Some(EventBuffer::default());
+    assert_eq!(d.buffer_clear_start(90, hm(13, 0)), hm(13, 0));
+    d.events[0].buffer = None;
+    d.events[1].buffer = Some(EventBuffer::default());
+    assert_eq!(d.buffer_clear_start(90, hm(13, 0)), hm(13, 0));
+    // two already overlapping are let be, so either can be dragged apart
+    d.events[1].buffer = None;
+    (d.events[1].start, d.events[1].end) = (hm(10, 30), hm(11, 30));
+    assert_eq!(d.buffer_clear_start(90, hm(10, 15)), hm(10, 15));
+}
+
+#[test]
 fn buffer_running_past_midnight_shows_on_both_days() {
     let mut d = empty();
     d.events.push(Event { id: 90, title: "Late show".into(), start: hm(22, 0), end: hm(23, 30), calendar: 2, ..Default::default() });

@@ -984,6 +984,8 @@ impl App {
                 match &mut self.drag {
                     Some(Drag::Move { id, grab_min }) => {
                         let ns = snap_dt(t - Duration::minutes(*grab_min), snap, 0);
+                        // its buffers stop at another event's, never over them
+                        let ns = self.data.buffer_clear_start(*id, ns);
                         if let Some(e) = self.data.event_mut(*id) {
                             let len = e.end - e.start;
                             e.start = ns;
@@ -992,8 +994,9 @@ impl App {
                         ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
                     }
                     Some(Drag::Resize { id }) => {
+                        let end = self.data.buffer_clear_end(*id, snap_dt(t, snap, 0));
                         if let Some(e) = self.data.event_mut(*id) {
-                            e.end = snap_dt(t, snap, 0).max(e.start + Duration::minutes(snap));
+                            e.end = end.max(e.start + Duration::minutes(snap));
                         }
                         ctx.set_cursor_icon(egui::CursorIcon::ResizeVertical);
                     }

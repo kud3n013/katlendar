@@ -89,6 +89,52 @@ impl Data {
         v
     }
 
+    /// An event with its buffers around it, while it has any and they show.
+    fn padded(&self, e: &Event) -> Option<(NaiveDateTime, NaiveDateTime)> {
+        if e.all_day || e.skipped || e.task_id.is_some() || !self.calendar(e.calendar).is_some_and(|c| c.visible) {
+            return None;
+        }
+        let (b, a) = self.buffer_of(e);
+        (b > 0 || a > 0).then(|| (e.start - Duration::minutes(b), e.end + Duration::minutes(a)))
+    }
+
+    /// The spans, buffers and all, of the buffered events that event `id`
+    /// may not run into: every one but those it already overlaps where it
+    /// is now.
+    fn buffer_walls(&self, id: u64) -> Option<(&Event, Vec<(NaiveDateTime, NaiveDateTime)>)> {
+        let e = self.event(id)?;
+        let here = self.padded(e)?;
+        let walls = self.events.iter().filter(|o| o.id != id).filter_map(|o| self.padded(o)).filter(|w| !(w.0 < here.1 && w.1 > here.0)).collect();
+        Some((e, walls))
+    }
+
+    /// Where event `id` stops when dragged to start at `start`: there while
+    /// its buffers stay clear of other events' buffers, else pushed back out
+    /// to the side it came from, its buffer just touching the other's.
+    pub fn buffer_clear_start(&self, id: u64, start: NaiveDateTime) -> NaiveDateTime {
+        let Some((e, walls)) = self.buffer_walls(id) else { return start };
+        let (b, a) = self.buffer_of(e);
+        let (len, down) = (e.end - e.start, start >= e.start);
+        let (b, a) = (Duration::minutes(b), Duration::minutes(a));
+        let mut s = start;
+        // each push may run it into the next one along, so go until clear
+        for _ in 0..=walls.len() {
+            let Some(w) = walls.iter().find(|w| w.0 < s + len + a && w.1 > s - b) else { break };
+            s = if down { w.0 - len - a } else { w.1 + b };
+        }
+        s
+    }
+
+    /// Where event `id`'s end stops when dragged to `end`: short of the
+    /// next buffered event, so their buffers only touch.
+    pub fn buffer_clear_end(&self, id: u64, end: NaiveDateTime) -> NaiveDateTime {
+        let Some((e, walls)) = self.buffer_walls(id) else { return end };
+        let (b, a) = self.buffer_of(e);
+        let from = e.start - Duration::minutes(b);
+        let a = Duration::minutes(a);
+        walls.iter().filter(|w| w.0 >= from && w.0 < end + a).map(|w| w.0 - a).fold(end, |m, t| m.min(t))
+    }
+
     /// Buffers touching one day.
     pub fn buffers_on(&self, day: NaiveDate) -> Vec<BufferOcc> {
         let a = day.and_hms_opt(0, 0, 0).unwrap();
