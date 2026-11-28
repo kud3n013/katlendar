@@ -78,7 +78,8 @@ pub struct Aids {
     pub list_edit: Option<String>,
     /// `KATLENDAR_NEW_LIST`: the new-list window open, as the + button opens it *(picture)*
     pub new_list: bool,
-    /// `KATLENDAR_DRAG="title@x,y"`: that task held as if dragged, pointer at x,y *(picture)*
+    /// `KATLENDAR_DRAG="title@x,y"`: that task, or that row of the colour
+    /// priority ("Tags"), held as if dragged, pointer at x,y *(picture)*
     pub drag: Option<(String, egui::Pos2)>,
     /// `KATLENDAR_MORPH=<0..1>`: the task panel held that far between the rail and open *(picture)*
     pub morph: Option<f32>,
