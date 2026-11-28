@@ -134,6 +134,8 @@ keyed! {
     /// a block on one day of the grid, for its settling motion
     block = "block";
     block_glow = "glow";
+    /// how far a block, frame or chip has gone grey: finished or skipped
+    greyed = "greyed";
     task_ghost = "task_ghost";
     /// a colour in the block colour menu
     colour_dot = "dot";

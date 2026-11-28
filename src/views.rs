@@ -78,17 +78,21 @@ struct FrameBox {
 
 /// Draws one calendar block. Plain events are filled with their colour and
 /// carry dark text; task sessions are dark with a coloured bar and a box to
-/// tick. `hover` is 0..1 and brightens the block.
-fn draw_item(p: &egui::Painter, pal: &Palette, it: &Item, selected: bool, hover: f32) {
+/// tick. `hover` is 0..1 and brightens the block. `fade` is how far it has
+/// gone grey (finished or skipped) and how far see-through (skipped), each
+/// 0..1, so the change can fade in and out.
+fn draw_item(p: &egui::Painter, pal: &Palette, it: &Item, selected: bool, hover: f32, fade: Fade) {
     let r = it.rect.shrink2(vec2(1.0, 0.0));
     let done = matches!(it.task, Some((_, true)));
     let is_task = it.task.is_some();
     // a finished task goes grey; a skipped event goes grey and see-through
-    let grey = Item { color: mix(pal.muted, pal.bg, 0.35), grad: None, ..it.clone() };
-    let it = if done || it.skipped { &grey } else { it };
+    let g = fade.grey;
+    let to_grey = |c: Color32| mix(c, mix(pal.muted, pal.bg, 0.35), g);
+    let grey = Item { color: to_grey(it.color), grad: it.grad.filter(|_| g < 1.0).map(|c| c.map(to_grey)), ..it.clone() };
+    let it = &grey;
     let mut faded = p.clone();
-    if it.skipped && !selected {
-        faded.multiply_opacity(SKIPPED_OPACITY);
+    if !selected && fade.see_through > 0.0 {
+        faded.multiply_opacity(1.0 - (1.0 - SKIPPED_OPACITY) * fade.see_through);
     }
     let p = &faded;
     let light = Color32::from_gray(if pal.dark { 228 } else { 245 });
@@ -96,7 +100,7 @@ fn draw_item(p: &egui::Painter, pal: &Palette, it: &Item, selected: bool, hover:
     let fill_of = |c: Color32| -> Color32 {
         if is_task {
             // a gradient's colours need a stronger wash to tell apart
-            let wash = if it.grad.is_some() { 0.26 } else { 0.14 };
+            let wash = if it.grad.is_some() { 0.26 - 0.12 * g } else { 0.14 };
             let base = mix(pal.bg, c, if it.draft || it.past { wash * 0.6 } else { wash });
             mix(base, c, 0.10 * hover)
         } else {
@@ -107,7 +111,7 @@ fn draw_item(p: &egui::Painter, pal: &Palette, it: &Item, selected: bool, hover:
     };
     let fill = fill_of(it.color);
     let (text, sub) = if is_task {
-        (if done || it.past { pal.muted } else { pal.text }, pal.muted)
+        (mix(if it.past { pal.muted } else { pal.text }, pal.muted, g), pal.muted)
     } else {
         let ink = theme::INK;
         (ink, mix(ink, fill, 0.25))
@@ -161,7 +165,20 @@ pub(crate) fn sample_block(p: &egui::Painter, pal: &Palette, rect: Rect, title: 
         BlockPaint::Gradient(g) => (rgb(g[0]), Some(g.map(rgb))),
     };
     let it = Item { id: 0, rect, title: title.into(), sub: sub.into(), color, grad, task: task.then_some((0, false)), draft: false, past: false, skipped: false };
-    draw_item(p, pal, &it, false, 0.0);
+    draw_item(p, pal, &it, false, 0.0, Fade::default());
+}
+
+/// How far a block has gone grey and see-through, each 0..1.
+#[derive(Clone, Copy, Default)]
+struct Fade {
+    grey: f32,
+    see_through: f32,
+}
+
+/// 0..1 towards `on`, fading when it changes; it starts where it is, so
+/// nothing fades on the first sight of it.
+fn fade_to(ctx: &egui::Context, key: impl std::hash::Hash + std::fmt::Debug, on: bool) -> f32 {
+    ctx.animate_bool_with_time(ids::greyed(key), on, motion::LONG.secs())
 }
 
 /// Where the tick box of a task session sits inside its block.
@@ -576,9 +593,10 @@ impl App {
             let (Some(a), Some(b)) = (first, last) else { continue };
             let y = hrect.top() + 47.0 + *row as f32 * 22.0;
             let r = Rect::from_min_max(pos2(x0 + a as f32 * col_w + 2.0, y), pos2(x0 + (b + 1) as f32 * col_w - 4.0, y + 20.0));
-            let color = if e.skipped { self.pal.muted } else { rgb(self.data.event_color(e)) };
+            let g = fade_to(ui.ctx(), ("chip", e.id), e.skipped);
+            let color = mix(rgb(self.data.event_color(e)), self.pal.muted, g);
             let is_draft = draft_id == Some(e.id);
-            hp.rect_filled(r, 4.0, mix(self.pal.bg, color, if is_draft || e.skipped { 0.25 } else { 0.55 }));
+            hp.rect_filled(r, 4.0, mix(self.pal.bg, color, if is_draft { 0.25 } else { 0.55 - 0.3 * g }));
             if self.selected == Some(e.id) {
                 hp.rect_stroke(r, 4.0, Stroke::new(1.5, self.pal.text), StrokeKind::Inside);
             }
@@ -588,7 +606,7 @@ impl App {
                 Align2::LEFT_CENTER,
                 title,
                 FontId::proportional(theme::size::SMALL),
-                if e.skipped { self.pal.muted } else { self.pal.text },
+                mix(self.pal.text, self.pal.muted, g),
             );
             if !is_draft {
                 chips.push((e.id, r));
@@ -774,7 +792,8 @@ impl App {
                 let col_l = x0 + di as f32 * col_w;
                 let r = Rect::from_min_max(pos2(col_l + 2.0, y_of(s)), pos2(col_l + col_w - 2.0, y_of(e)));
                 // a skipped day stays in view, greyed out
-                let color = if skipped { mix(self.pal.muted, self.pal.bg, 0.45) } else { rgb(self.data.frame_color(f)) };
+                let g = fade_to(ui.ctx(), ("frame", f.id, *day), skipped);
+                let color = mix(rgb(self.data.frame_color(f)), mix(self.pal.muted, self.pal.bg, 0.45), g);
                 // see-through, so the grid lines stay visible: lightened on a
                 // dark theme, a plain tint on a light one
                 let wash = if self.pal.dark { mix(color, Color32::WHITE, 0.25).gamma_multiply(0.14) } else { color.gamma_multiply(0.09) };
@@ -790,7 +809,7 @@ impl App {
                     Align2::LEFT_TOP,
                     if skipped { format!("{} (skipped)", f.name) } else { f.name.clone() },
                     FontId::proportional(theme::size::MICRO),
-                    if skipped { mix(self.pal.muted, self.pal.bg, 0.3) } else { self.pal.muted },
+                    mix(self.pal.muted, mix(self.pal.muted, self.pal.bg, 0.3), g),
                 );
                 frame_boxes.push(FrameBox { id: f.id, day: *day, rect: r, label, color, skipped });
             }
@@ -944,7 +963,9 @@ impl App {
         for it in &items {
             let hovered = !it.draft && self.drag.is_none() && self.drag_task.is_none() && hover_id == Some(it.id);
             let glow = ctx.animate_bool_with_time(ids::block_glow(it.id), hovered, motion::HOVER.secs());
-            draw_item(&painter, &self.pal, it, self.selected == Some(it.id) && !it.draft, glow);
+            let done = matches!(it.task, Some((_, true)));
+            let fade = Fade { grey: fade_to(&ctx, ("block", it.id), done || it.skipped), see_through: fade_to(&ctx, ("skip", it.id), it.skipped) };
+            draw_item(&painter, &self.pal, it, self.selected == Some(it.id) && !it.draft, glow, fade);
         }
 
         if let Some(i) = days.iter().position(|d| *d == today) {
@@ -1578,12 +1599,13 @@ impl App {
             let clip = painter.with_clip_rect(cell.shrink(1.0));
             for (k, e) in evs.iter().take(show).enumerate() {
                 let er = Rect::from_min_size(cell.left_top() + vec2(3.0, 26.0 + k as f32 * 19.0), vec2(cw - 6.0, 17.0));
-                let color = if e.skipped { self.pal.muted } else { rgb(self.data.event_color(e)) };
+                let g = fade_to(&ctx, ("month", e.id, *d), e.skipped);
+                let color = mix(rgb(self.data.event_color(e)), self.pal.muted, g);
                 let title = if e.title.is_empty() { tr("New Event") } else { &e.title };
                 let tclip = painter.with_clip_rect(er.intersect(cell));
-                let ink = if e.skipped { self.pal.muted } else { self.pal.text };
+                let ink = mix(self.pal.text, self.pal.muted, g);
                 if e.all_day {
-                    clip.rect_filled(er, 4.0, mix(self.pal.bg, color, if e.skipped { 0.25 } else { 0.55 }));
+                    clip.rect_filled(er, 4.0, mix(self.pal.bg, color, 0.55 - 0.3 * g));
                     tclip.text(er.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, title, FontId::proportional(theme::size::TINY), ink);
                 } else {
                     clip.circle_filled(er.left_center() + vec2(6.0, 0.0), 3.5, color);
