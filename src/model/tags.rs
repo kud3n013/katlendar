@@ -93,6 +93,15 @@ impl Data {
             fix(&mut f.filter.tags);
         }
         fix(&mut self.prefs.frame_first_tags);
+        // a picked colour goes with its tag to the new name, unless that
+        // one has its own; a removed tag's is forgotten
+        let picked = to.and_then(|t| self.tag_picked(t)).or_else(|| from.iter().find_map(|f| self.tag_picked(f)));
+        for f in from {
+            self.set_tag_color(f, None);
+        }
+        if let Some(to) = to {
+            self.set_tag_color(to, picked);
+        }
         n
     }
 }

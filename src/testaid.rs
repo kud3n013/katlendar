@@ -50,6 +50,8 @@ pub struct Aids {
     /// `KATLENDAR_BUFFERS`: 30 minutes before and 15 after each Work event, and
     /// the first lunch has its own buffer, 30 minutes after
     pub buffers: bool,
+    /// `KATLENDAR_BLOCKS=dynamic`: blocks painted as gradients of their colours *(picture)*
+    pub blocks_dynamic: bool,
     /// `KATLENDAR_SHOW_MENU=<name>`: a right-click menu, shown in a window
     pub show_menu: Option<String>,
     /// `KATLENDAR_SHOW_SETTINGS=<page>`: the settings fill the window
@@ -122,6 +124,7 @@ fn read(var: impl Fn(&str) -> Option<String>) -> Aids {
         demo_account: on("DEMO_ACCOUNT"),
         grey: on("GREY"),
         buffers: on("BUFFERS"),
+        blocks_dynamic: set("BLOCKS").is_some_and(|v| v.eq_ignore_ascii_case("dynamic")),
         show_menu: set("SHOW_MENU"),
         show_settings: set("SHOW_SETTINGS"),
         settings_query: set("SETTINGS_QUERY"),

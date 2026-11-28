@@ -89,6 +89,12 @@ pub struct Prefs {
     /// the main colour of buttons, switches and marks, and of a block
     /// whose calendar has gone; None is the app's own
     pub main_color: Option<[u8; 3]>,
+    /// where a block's colour comes from, first first, and which are used
+    pub color_order: Vec<SourcePref>,
+    /// one colour for a block, or a gradient of its sources'
+    pub block_scheme: BlockScheme,
+    /// colours picked for tags, by lower-cased name; the rest are automatic
+    pub tag_colors: std::collections::BTreeMap<String, [u8; 3]>,
     pub first_day: u8, // 0 = Sunday
     pub hour12: bool,
     pub initial_view: View,
@@ -177,6 +183,9 @@ impl Default for Prefs {
             default_calendar: None,
             default_list: None,
             main_color: None,
+            color_order: ColorSource::ALL.iter().map(|&source| SourcePref { source, on: true }).collect(),
+            block_scheme: BlockScheme::Primary,
+            tag_colors: Default::default(),
             first_day: 0,
             hour12: false,
             initial_view: View::Week,

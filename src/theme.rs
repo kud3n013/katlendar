@@ -159,3 +159,20 @@ pub fn fill_squircle(p: &egui::Painter, rect: egui::Rect, radius: f32, fill: Col
 pub fn stroke_squircle(p: &egui::Painter, rect: egui::Rect, radius: f32, stroke: egui::Stroke) {
     p.add(egui::Shape::closed_line(squircle_points(rect, radius), stroke));
 }
+
+/// A squircle filled with a gradient between four corner colours: top left,
+/// top right, bottom left, bottom right. Its edge is smoothed like a plain
+/// fill's.
+pub fn fill_gradient_squircle(p: &egui::Painter, rect: egui::Rect, radius: f32, corners: [Color32; 4]) {
+    let shape = egui::epaint::PathShape::convex_polygon(squircle_points(rect, radius), Color32::WHITE, egui::Stroke::NONE);
+    let mut mesh = egui::epaint::Mesh::default();
+    egui::epaint::Tessellator::new(p.pixels_per_point(), Default::default(), [1, 1], vec![]).tessellate_path(&shape, &mut mesh);
+    for v in &mut mesh.vertices {
+        let u = ((v.pos.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
+        let t = ((v.pos.y - rect.top()) / rect.height().max(1.0)).clamp(0.0, 1.0);
+        let c = mix(mix(corners[0], corners[1], u), mix(corners[2], corners[3], u), t);
+        // white times coverage: keep the coverage
+        v.color = c.gamma_multiply(v.color.a() as f32 / 255.0);
+    }
+    p.add(egui::Shape::mesh(mesh));
+}

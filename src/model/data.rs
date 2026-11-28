@@ -217,21 +217,18 @@ impl Data {
     pub fn task_is_scheduled(&self, id: u64) -> bool {
         self.events.iter().any(|e| e.task_id == Some(id))
     }
-    /// An event's own colour, else for a task's block its task's or list's
-    /// colour (the Inbox is a list too), else its calendar's, else the main
-    /// colour.
+    /// An event's own colour, else for a task's block its task's, else the
+    /// colour of the first source in the colour priority (by default its
+    /// list's, the Inbox being a list too, then its tag's, then its
+    /// calendar's), else the main colour. A gradient block gives its first
+    /// source's colour here, for dots and chips.
     pub fn event_color(&self, e: &Event) -> [u8; 3] {
         e.color.unwrap_or_else(|| self.block_color(e.task_id.and_then(|t| self.task(t)), e.calendar))
     }
-    /// The colour of a task's block in a calendar: the task's own, else its
-    /// list's; with no task, the calendar's.
+    /// The colour of a task's block in a calendar: the task's own, else the
+    /// first in the colour priority; with no task, the calendar's.
     pub fn block_color(&self, task: Option<&Task>, cal: u64) -> [u8; 3] {
-        task.and_then(|t| t.color).unwrap_or_else(|| self.list_color(task, cal))
-    }
-    /// A task's block colour without its own: its list's, the Inbox's for a
-    /// task in no list; with no task, the calendar's.
-    pub fn list_color(&self, task: Option<&Task>, cal: u64) -> [u8; 3] {
-        task.map(|t| self.color_of_list(t.list)).unwrap_or_else(|| self.calendar_color(cal))
+        task.and_then(|t| t.color).unwrap_or_else(|| self.primary_color(&self.block_colors(task, cal)))
     }
     /// The main colour picked under Appearance, else the app's own.
     pub fn main_color(&self) -> [u8; 3] {

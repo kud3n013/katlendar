@@ -2,6 +2,7 @@
 
 mod buffer;
 mod calendar;
+mod colors;
 mod data;
 mod frame;
 mod place;
@@ -17,6 +18,7 @@ mod tests;
 
 pub use buffer::*;
 pub use calendar::*;
+pub use colors::*;
 pub use data::*;
 pub use frame::*;
 pub use place::*;
