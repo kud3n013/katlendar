@@ -1048,3 +1048,84 @@ fn settings_from_a_newer_version_survive_an_older_one() {
     assert_eq!(back["some_new_setting"]["on"], true);
     assert_eq!(back["default_list"], 7);
 }
+
+#[test]
+fn a_block_takes_the_first_colour_of_the_priority_list() {
+    let mut d = empty();
+    let cal = d.first_own_calendar();
+    let cal_col = d.calendar_color(cal);
+    d.lists.push(TaskList { id: 4242, color: [1, 2, 3], ..Default::default() });
+    d.tasks.push(Task { id: 1, list: 4242, tags: vec!["Admin".into()], ..Default::default() });
+    d.set_tag_color("admin", Some([7, 7, 7]));
+    let block = Event { task_id: Some(1), calendar: cal, ..Default::default() };
+    // lists first, as before
+    assert_eq!(d.event_color(&block), [1, 2, 3]);
+    let s = |source, on| SourcePref { source, on };
+    d.prefs.color_order = vec![s(ColorSource::Tags, true), s(ColorSource::Calendars, true), s(ColorSource::Lists, true)];
+    assert_eq!(d.event_color(&block), [7, 7, 7]);
+    // a source switched off is passed over
+    d.prefs.color_order[0].on = false;
+    assert_eq!(d.event_color(&block), cal_col);
+    // and with none on, the main colour
+    d.prefs.color_order.iter_mut().for_each(|p| p.on = false);
+    assert_eq!(d.event_color(&block), d.main_color());
+    // a colour picked for the task or the block always wins
+    d.task_mut(1).unwrap().color = Some([9, 9, 9]);
+    assert_eq!(d.event_color(&block), [9, 9, 9]);
+    assert_eq!(d.event_paint(&Event { color: Some([4, 4, 4]), ..block }), BlockPaint::Solid([4, 4, 4]));
+}
+
+#[test]
+fn a_missing_source_is_added_to_the_priority_list_once() {
+    let mut p = Prefs::default();
+    p.color_order = vec![SourcePref { source: ColorSource::Calendars, on: false }, SourcePref { source: ColorSource::Calendars, on: true }];
+    let order = p.color_order();
+    assert_eq!(order.len(), 3);
+    assert_eq!(order[0], SourcePref { source: ColorSource::Calendars, on: false });
+    assert!(order[1..].iter().all(|o| o.on));
+}
+
+#[test]
+fn a_dynamic_block_is_a_gradient_of_its_colours() {
+    let (l, t, c) = ([1, 1, 1], [2, 2, 2], [3, 3, 3]);
+    let all = BlockColors { list: Some(l), tag: Some(t), cal: Some(c) };
+    // the list along the top, the tag from the bottom left, the calendar from the bottom right
+    assert_eq!(all.corners(), Some([l, l, t, c]));
+    assert_eq!(BlockColors { tag: None, ..all }.corners(), Some([l, l, c, c]));
+    assert_eq!(BlockColors { list: None, ..all }.corners(), Some([t, c, t, c]));
+    assert_eq!(BlockColors::default().corners(), None);
+
+    let mut p = Prefs { block_scheme: BlockScheme::Dynamic, ..Default::default() };
+    assert_eq!(p.paint_of(&all, [0, 0, 0]), BlockPaint::Gradient([l, l, t, c]));
+    // one colour alone is no gradient
+    assert_eq!(p.paint_of(&BlockColors { cal: Some(c), ..Default::default() }, [0, 0, 0]), BlockPaint::Solid(c));
+    // a source switched off leaves the gradient
+    p.color_order = vec![SourcePref { source: ColorSource::Tags, on: false }];
+    assert_eq!(p.paint_of(&all, [0, 0, 0]), BlockPaint::Gradient([l, l, c, c]));
+    p.block_scheme = BlockScheme::Primary;
+    assert_eq!(p.paint_of(&all, [0, 0, 0]), BlockPaint::Solid(l));
+}
+
+#[test]
+fn a_tag_has_a_colour_of_its_own_until_one_is_picked() {
+    let mut d = empty();
+    assert_eq!(d.tag_color("Admin"), auto_tag_color("admin"));
+    assert_ne!(auto_tag_color("admin"), EVENT_COLORS[EVENT_COLORS.len() - 1].0, "never the grey");
+    d.set_tag_color("ADMIN", Some([7, 7, 7]));
+    assert_eq!(d.tag_color("admin"), [7, 7, 7]);
+    d.set_tag_color("admin", None);
+    assert_eq!(d.tag_color("admin"), auto_tag_color("admin"));
+}
+
+#[test]
+fn a_picked_tag_colour_follows_a_rename_and_goes_with_a_removal() {
+    let mut d = empty();
+    d.tasks.push(Task { id: 1, tags: vec!["old".into(), "gone".into()], ..Default::default() });
+    d.set_tag_color("old", Some([7, 7, 7]));
+    d.set_tag_color("gone", Some([8, 8, 8]));
+    d.rename_tags(&["old".into()], "new");
+    assert_eq!(d.tag_picked("new"), Some([7, 7, 7]));
+    assert_eq!(d.tag_picked("old"), None);
+    d.remove_tags(&["gone".into()]);
+    assert_eq!(d.tag_picked("gone"), None);
+}

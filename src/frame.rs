@@ -139,6 +139,7 @@ impl eframe::App for App {
                 "frames" => Page::Frames,
                 "lists" => Page::Lists,
                 "tags" => Page::Tags,
+                "colours" | "colors" => Page::Colors,
                 "appearance" => Page::Appearance,
                 "info" => Page::Info,
                 "maps" => Page::Maps,

@@ -424,6 +424,9 @@ impl App {
             data.accounts.push(Account { id: 920, server: crate::sync::todoist::API.into(), username: "Todoist".into(), home: Some(crate::sync::todoist::API.into()), todoist: true, ..Default::default() });
             data.lists.push(TaskList { id: 921, name: tr("Errands").into(), color: [0xdb, 0x40, 0x35], account: Some(920), remote_id: Some("6Jf8VQXxpwv56VQ7".into()), ..Default::default() });
         }
+        if shot.is_some() && testaid::get().blocks_dynamic {
+            data.prefs.block_scheme = crate::model::BlockScheme::Dynamic;
+        }
         if shot.is_some() && testaid::get().maps_google {
             data.prefs.map_provider = crate::model::MapProvider::Google;
         }

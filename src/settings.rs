@@ -19,6 +19,7 @@ pub enum Page {
     ActiveCalendars,
     Lists,
     Tags,
+    Colors,
     Planner,
     Frames,
     QuickAdd,
@@ -30,12 +31,13 @@ const CONTROL_W: f32 = 390.0;
 const ROW_H: f32 = 56.0;
 
 /// The order pages are listed in search results.
-const SEARCH_ORDER: [(Page, &str); 12] = [
+const SEARCH_ORDER: [(Page, &str); 13] = [
     (Page::General, later("General")),
     (Page::Appearance, later("Appearance")),
     (Page::ActiveCalendars, later("Active calendars")),
     (Page::Lists, later("Task lists")),
     (Page::Tags, later("Tags")),
+    (Page::Colors, later("Colours")),
     (Page::Planner, later("Planner")),
     (Page::Frames, later("Frames")),
     (Page::QuickAdd, later("Quick add")),
@@ -179,6 +181,11 @@ fn row_lead(ui: &mut egui::Ui, shown: Option<&mut bool>, hover: Color32) -> (egu
             ui.allocate_exact_size(vec2(s, s), Sense::hover());
         }
     }
+    color_button(ui, hover)
+}
+
+/// The square a colour is drawn in that opens its picker, lit when hovered.
+fn color_button(ui: &mut egui::Ui, hover: Color32) -> (egui::Rect, egui::Response) {
     let (r, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
     if resp.hovered() {
         crate::fill_squircle(ui.painter(), r, 8.0, hover);
@@ -523,6 +530,7 @@ impl App {
                             (Page::ActiveCalendars, icons::SQUARE_CHECK, tr("Active calendars")),
                             (Page::Lists, icons::LIST_TODO, tr("Task lists")),
                             (Page::Tags, icons::TAG, tr("Tags")),
+                            (Page::Colors, icons::BLEND, tr("Colours")),
                             (Page::Planner, icons::SHUFFLE, tr("Planner")),
                             (Page::Frames, icons::CLOCK, tr("Frames")),
                             (Page::QuickAdd, icons::KEYBOARD, tr("Quick add")),
@@ -577,7 +585,8 @@ impl App {
                         Page::QuickAdd => self.page_quick_add(ui),
                         Page::ActiveCalendars => self.page_active(ui),
                         Page::Lists => self.page_lists(ui),
-                Page::Tags => self.page_tags(ui),
+                        Page::Tags => self.page_tags(ui),
+                        Page::Colors => self.page_colors(ui),
                         Page::Calendars => self.page_calendars(ui, &ctx),
                         Page::Maps => self.page_maps(ui),
                         Page::Shortcuts => self.page_shortcuts(ui),
@@ -607,6 +616,7 @@ impl App {
                 Page::ActiveCalendars => self.page_active(ui),
                 Page::Lists => self.page_lists(ui),
                 Page::Tags => self.page_tags(ui),
+                Page::Colors => self.page_colors(ui),
                 Page::Calendars => self.page_calendars(ui, ctx),
                 Page::Maps => self.page_maps(ui),
                 Page::Shortcuts => self.page_shortcuts(ui),
@@ -805,7 +815,7 @@ impl App {
             combo(ui, "sz", &mut pct, &sizes);
             p.ui_scale = pct as f32 / 100.0;
         });
-        row(ui, tr("Main colour"), tr("For buttons, switches and marks, and for a block whose calendar has gone. Blocks take their list's colour, or their calendar's when they have no list or sit in the Inbox."), |ui| {
+        row(ui, tr("Main colour"), tr("For buttons, switches and marks, and for a block that takes no other colour. Where blocks take their colours from is set under Colours."), |ui| {
             crate::dialogs::swatches(ui, MAIN_COLOR, tr("Default"), &mut p.main_color);
         });
         let accent = self.pal.accent;
@@ -1370,14 +1380,14 @@ impl App {
         let tags = self.data.all_tags();
         if finding(ui) {
             let names: Vec<&str> = tags.iter().map(|u| u.name.as_str()).collect();
-            let words = [&["tag", "tags", "label", "hashtag", "rename", "merge", "remove", "delete", "bulk"][..], &names].concat();
-            page_result(ui, Page::Tags, tr("Manage tags"), tr("Rename, merge or remove tags on all tasks and frames at once"), &words);
+            let words = [&["tag", "tags", "label", "hashtag", "rename", "merge", "remove", "delete", "bulk", "colour", "color"][..], &names].concat();
+            page_result(ui, Page::Tags, tr("Manage tags"), tr("Rename, merge or remove tags on all tasks and frames at once, and change their colour"), &words);
             return;
         }
         let ctx = ui.ctx().clone();
         let (muted, border, side, text, accent) = (self.pal.muted, self.pal.border, self.pal.side, self.pal.text, self.pal.accent);
         heading(ui, tr("Tags"));
-        ui.add(egui::Label::new(RichText::new(tr("Rename a tag by editing its name. Tick several to rename, merge or remove them together; tasks, frames and the planner follow.")).size(theme::size::UI).color(muted)).wrap());
+        ui.add(egui::Label::new(RichText::new(tr("Rename a tag by editing its name, or click its dot to change its colour. Tick several to rename, merge or remove them together; tasks, frames and the planner follow.")).size(theme::size::UI).color(muted)).wrap());
         ui.add_space(12.0);
         if tags.is_empty() {
             ui.label(RichText::new(tr("No tags yet. Type #tag in a task's title or add tags in a task's details.")).size(theme::size::UI).color(muted));
@@ -1449,6 +1459,18 @@ impl App {
                             self.tag_sel.remove(&key);
                         }
                     }
+                    // the dot opens the colours: its own, or one picked
+                    let (r, resp) = color_button(ui, mix(side, text, 0.08));
+                    ui.painter().circle_filled(r.center(), 6.5, rgb(self.data.tag_color(&u.name)));
+                    let resp = resp.on_hover_text(tr("Colour"));
+                    egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                        ui.set_width(236.0);
+                        let mut c = self.data.tag_picked(&u.name);
+                        crate::dialogs::swatches(ui, crate::model::auto_tag_color(&u.name), tr("Automatic"), &mut c);
+                        if c != self.data.tag_picked(&u.name) {
+                            self.data.set_tag_color(&u.name, c);
+                        }
+                    });
                     ui.label(RichText::new("#").size(theme::size::LARGE).color(muted));
                     let mut name = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| u.name.clone());
                     let r = ui.add(
@@ -1496,6 +1518,105 @@ impl App {
             self.tag_to.clear();
             self.commit();
         }
+    }
+
+    /// Where a block's colour comes from: the scheme, then the sources in
+    /// the order they win, each one on or off, and a preview.
+    fn page_colors(&mut self, ui: &mut egui::Ui) {
+        let scheme_tip = tr("Primary paints a block in the first colour of the list below that it has. Dynamic blends them all: the list's colour along the top, the tag's from the bottom left, the calendar's from the bottom right.");
+        let schemes = vec![(BlockScheme::Primary, tr("Primary").to_string()), (BlockScheme::Dynamic, tr("Dynamic (gradient)").to_string())];
+        if finding(ui) {
+            let p = &mut self.data.prefs;
+            if shown(ui, &[tr("Block colours"), scheme_tip, "gradient", "primary", "dynamic", "colour", "color"]) {
+                row(ui, tr("Block colours"), scheme_tip, |ui| combo(ui, "scheme", &mut p.block_scheme, &schemes));
+            }
+            page_result(ui, Page::Colors, tr("Colour priority"), tr("Whose colour a block takes first: its tag's, its list's or its calendar's"), &["colour", "color", "priority", "order", "tag", "list", "calendar"]);
+            return;
+        }
+        let (muted, border, text, accent) = (self.pal.muted, self.pal.border, self.pal.text, self.pal.accent);
+        heading(ui, tr("Colours"));
+        ui.add(egui::Label::new(RichText::new(tr("Choose where a block on the calendar takes its colour from: its task's tag, its task's list or its calendar. A colour picked for a block or a task always wins.")).size(theme::size::UI).color(muted)).wrap());
+        ui.add_space(12.0);
+        let p = &mut self.data.prefs;
+        row(ui, tr("Block colours"), scheme_tip, |ui| combo(ui, "scheme", &mut p.block_scheme, &schemes));
+        divider(ui, border);
+
+        ui.label(RichText::new(tr("Colour priority")).font(theme::bold(20.0)));
+        ui.add_space(2.0);
+        ui.add(egui::Label::new(RichText::new(tr("Drag to reorder: the one on top comes first. Untick one to leave its colour out.")).size(theme::size::UI).color(muted)).wrap());
+        ui.add_space(8.0);
+        let mut order = p.color_order();
+        let before = order.clone();
+        // a row picked up, and where it is let go
+        #[derive(Clone, Copy)]
+        struct Held(usize);
+        let mut drop: Option<(usize, usize)> = None;
+        let held = egui::DragAndDrop::payload::<Held>(ui.ctx()).map(|h| h.0);
+        let n = order.len();
+        for (i, sp) in order.iter_mut().enumerate() {
+            let what = match sp.source {
+                ColorSource::Lists => tr("the list a task is in; the Inbox is a list too"),
+                ColorSource::Tags => tr("a task's first tag"),
+                ColorSource::Calendars => tr("the calendar a block is in"),
+            };
+            let resp = ui
+                .allocate_ui_with_layout(vec2(ui.available_width(), 44.0), Layout::left_to_right(Align::Center), |ui| {
+                    let grab = ui.dnd_drag_source(ids::color_source(sp.source), Held(i), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(icons::GRIP).size(theme::size::LARGE).color(muted));
+                            ui.label(RichText::new(format!("{}", i + 1)).size(theme::size::UI).color(muted));
+                        });
+                    });
+                    grab.response.on_hover_text(tr("Drag to reorder"));
+                    ui.checkbox(&mut sp.on, "").on_hover_text(tr("Use this colour"));
+                    let name = RichText::new(sp.source.label()).size(theme::size::LARGE).color(if sp.on { text } else { muted });
+                    ui.label(name);
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(what).size(theme::size::CAPTION).color(muted));
+                })
+                .response;
+            // where the held row would land
+            if let Some(from) = held.filter(|f| *f != i) {
+                if resp.contains_pointer() {
+                    let y = if from < i { resp.rect.bottom() } else { resp.rect.top() };
+                    ui.painter().line_segment([egui::pos2(resp.rect.left(), y), egui::pos2(resp.rect.right(), y)], Stroke::new(2.0, accent));
+                }
+            }
+            if let Some(from) = resp.dnd_release_payload::<Held>() {
+                drop = Some((from.0, i));
+            }
+            if i + 1 < n {
+                let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+                ui.painter().rect_filled(r, 0.0, border);
+            }
+        }
+        if let Some((from, to)) = drop {
+            let x = order.remove(from);
+            order.insert(to, x);
+        }
+        if order != before {
+            p.color_order = order;
+        }
+        divider(ui, border);
+
+        // what that looks like, with colours of the palette
+        ui.label(RichText::new(tr("Preview")).font(theme::bold(20.0)));
+        ui.add_space(6.0);
+        let sample = BlockColors { list: Some(EVENT_COLORS[8].0), tag: Some(EVENT_COLORS[2].0), cal: Some(EVENT_COLORS[6].0) };
+        let blocks = [
+            (tr("Task with a tag"), sample, true),
+            (tr("Task without tags"), BlockColors { tag: None, ..sample }, true),
+            (tr("Event"), BlockColors { list: None, tag: None, ..sample }, false),
+        ];
+        let w = ((ui.available_width() - 24.0) / 3.0).clamp(90.0, 200.0);
+        let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), 64.0), Sense::hover());
+        let main = self.data.main_color();
+        for (k, (title, c, task)) in blocks.into_iter().enumerate() {
+            let r = egui::Rect::from_min_size(strip.left_top() + vec2(k as f32 * (w + 12.0), 0.0), vec2(w, 64.0));
+            crate::views::sample_block(ui.painter(), &self.pal, r, title, "10:00 – 11:00", self.data.prefs.paint_of(&c, main), task);
+        }
+        ui.add_space(4.0);
+        ui.label(RichText::new(tr("Blue is the list, orange the tag, green the calendar.")).size(theme::size::CAPTION).color(muted));
     }
 
     fn page_calendars(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {

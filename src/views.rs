@@ -26,6 +26,8 @@ struct Item {
     title: String,
     sub: String,
     color: Color32,
+    /// a gradient over the block, corner by corner, in place of `color`
+    grad: Option<[Color32; 4]>,
     task: Option<(u64, bool)>,
     draft: bool,
     past: bool,
@@ -82,26 +84,42 @@ fn draw_item(p: &egui::Painter, pal: &Palette, it: &Item, selected: bool, hover:
     let done = matches!(it.task, Some((_, true)));
     let is_task = it.task.is_some();
     // a finished task goes grey; a skipped event goes grey and see-through
-    let grey = Item { color: mix(pal.muted, pal.bg, 0.35), ..it.clone() };
+    let grey = Item { color: mix(pal.muted, pal.bg, 0.35), grad: None, ..it.clone() };
     let it = if done || it.skipped { &grey } else { it };
     let mut faded = p.clone();
     if it.skipped && !selected {
         faded.multiply_opacity(SKIPPED_OPACITY);
     }
     let p = &faded;
-    let soft = mix(it.color, Color32::from_gray(if pal.dark { 228 } else { 245 }), 0.5);
-    let (fill, text, sub) = if is_task {
-        let base = mix(pal.bg, it.color, if it.draft || it.past { 0.08 } else { 0.14 });
-        (mix(base, it.color, 0.10 * hover), if done || it.past { pal.muted } else { pal.text }, pal.muted)
-    } else {
-        let base = if selected { it.color } else { soft };
-        let base = if it.draft || it.past { mix(pal.bg, base, 0.45) } else { base };
-        let ink = theme::INK;
-        (mix(base, it.color, 0.5 * hover), ink, mix(ink, base, 0.25))
+    let light = Color32::from_gray(if pal.dark { 228 } else { 245 });
+    // the fill a colour gives: a task's a wash of it, an event's a soft tint
+    let fill_of = |c: Color32| -> Color32 {
+        if is_task {
+            // a gradient's colours need a stronger wash to tell apart
+            let wash = if it.grad.is_some() { 0.26 } else { 0.14 };
+            let base = mix(pal.bg, c, if it.draft || it.past { wash * 0.6 } else { wash });
+            mix(base, c, 0.10 * hover)
+        } else {
+            let base = if selected { c } else { mix(c, light, 0.5) };
+            let base = if it.draft || it.past { mix(pal.bg, base, 0.45) } else { base };
+            mix(base, c, 0.5 * hover)
+        }
     };
-    fill_squircle(p, r, theme::RADIUS, fill);
-    let edge = if selected { pal.text } else if is_task { mix(pal.bg, it.color, 0.75) } else { fill };
-    stroke_squircle(p, r.shrink(0.5), theme::RADIUS, Stroke::new(if selected { 1.5 } else { 1.0 }, edge));
+    let fill = fill_of(it.color);
+    let (text, sub) = if is_task {
+        (if done || it.past { pal.muted } else { pal.text }, pal.muted)
+    } else {
+        let ink = theme::INK;
+        (ink, mix(ink, fill, 0.25))
+    };
+    match it.grad {
+        Some(g) => theme::fill_gradient_squircle(p, r, theme::RADIUS, g.map(fill_of)),
+        None => fill_squircle(p, r, theme::RADIUS, fill),
+    }
+    if selected || is_task || it.grad.is_none() {
+        let edge = if selected { pal.text } else if is_task { mix(pal.bg, it.color, 0.75) } else { fill };
+        stroke_squircle(p, r.shrink(0.5), theme::RADIUS, Stroke::new(if selected { 1.5 } else { 1.0 }, edge));
+    }
     let mut x = r.left() + 6.0;
     let tall = r.height() >= 36.0;
     if is_task {
@@ -134,6 +152,16 @@ fn draw_item(p: &egui::Painter, pal: &Palette, it: &Item, selected: bool, hover:
     }
     let font = if !tall && r.height() < 20.0 { theme::bold(theme::size::MICRO) } else { title_font };
     clip.text(pos2(tx, ty), Align2::LEFT_TOP, title, font, text);
+}
+
+/// A block drawn as on the calendar, for a preview: a task's when `task`.
+pub(crate) fn sample_block(p: &egui::Painter, pal: &Palette, rect: Rect, title: &str, sub: &str, paint: BlockPaint, task: bool) {
+    let (color, grad) = match paint {
+        BlockPaint::Solid(c) => (rgb(c), None),
+        BlockPaint::Gradient(g) => (rgb(g[0]), Some(g.map(rgb))),
+    };
+    let it = Item { id: 0, rect, title: title.into(), sub: sub.into(), color, grad, task: task.then_some((0, false)), draft: false, past: false, skipped: false };
+    draw_item(p, pal, &it, false, 0.0);
 }
 
 /// Where the tick box of a task session sits inside its block.
@@ -863,10 +891,16 @@ impl App {
                 }
                 // a new task's block takes the colour of the list it goes in
                 let new_task = self.editor.as_ref().filter(|ed| *draft && ed.ev.id == e.id).and_then(|ed| ed.task.as_ref());
-                let draft_color = match (new_task, *draft && task.is_some()) {
-                    (Some(t), _) => e.color.unwrap_or_else(|| self.data.block_color(Some(&t.task), e.calendar)),
-                    (None, true) => e.color.unwrap_or_else(|| self.data.color_of_list(self.create.as_ref().map_or_else(|| self.data.default_list(), |c| c.task.list))),
-                    (None, false) => self.data.event_color(e),
+                let paint = match (new_task, *draft && task.is_some()) {
+                    (Some(t), _) => self.data.block_paint(e.color, Some(&t.task), e.calendar),
+                    (None, true) => BlockPaint::Solid(e.color.unwrap_or_else(|| self.data.color_of_list(self.create.as_ref().map_or_else(|| self.data.default_list(), |c| c.task.list)))),
+                    (None, false) => self.data.event_paint(e),
+                };
+                // the first source's colour, for the side bar and the edge
+                let draft_color = match (paint, new_task) {
+                    (BlockPaint::Solid(c), _) => c,
+                    (_, Some(t)) => self.data.block_color(Some(&t.task), e.calendar),
+                    _ => self.data.event_color(e),
                 };
                 let mut target = Rect::from_min_max(pos2(x, top_y), pos2(x + width * cw, bottom_y));
                 if !*draft {
@@ -895,6 +929,7 @@ impl App {
                         },
                         sub: format!("{} – {}", p.fmt_time(e.start.time()), p.fmt_time(e.end.time())),
                         color: rgb(draft_color),
+                        grad: paint.gradient().map(|g| g.map(rgb)),
                         task,
                         draft: *draft,
                         past: p.dim_past && e.end < now,

@@ -96,6 +96,8 @@ fixed! {
 }
 
 keyed! {
+    /// a row of the colour priority, picked up to reorder
+    color_source = "colour source";
     /// where the map of an editor's place was left: "event" or "task"
     place_map = "placemap";
     /// the Maps settings' API key field, and how keeping the key went
